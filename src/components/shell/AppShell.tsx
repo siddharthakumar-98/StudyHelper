@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { requireUser } from "@/lib/auth";
+import type { SessionUser } from "@/lib/auth";
 import { createServerSupabase } from "@/lib/supabase/server";
 import { NavTabs } from "./NavTabs";
 import { TextScaleControl } from "./TextScaleControl";
@@ -12,8 +12,13 @@ async function signOut() {
 }
 
 /** Wraps every signed-in page: account bar, navigation and the page itself. */
-export async function AppShell({ children }: { children: React.ReactNode }) {
-  const user = await requireUser();
+export function AppShell({
+  user,
+  children,
+}: {
+  user: SessionUser;
+  children: React.ReactNode;
+}) {
   return (
     <div className="lg:flex lg:min-h-screen">
       <aside className="lg:sticky lg:top-0 lg:flex lg:h-screen lg:w-72 lg:shrink-0 lg:flex-col lg:border-r lg:border-zinc-300">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useState, useSyncExternalStore, type FormEvent } from "react";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 
 export default function LoginPage() {
@@ -10,6 +10,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // Lets tests (and nothing else) know the form is interactive.
+  const hydrated = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -33,7 +39,11 @@ export default function LoginPage() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center gap-6 px-6">
       <h1 className="text-3xl font-semibold">Sign in</h1>
-      <form onSubmit={onSubmit} className="flex flex-col gap-5">
+      <form
+        onSubmit={onSubmit}
+        data-hydrated={hydrated ? "true" : "false"}
+        className="flex flex-col gap-5"
+      >
         <label className="flex flex-col gap-2 text-lg">
           Email
           <input

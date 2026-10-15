@@ -47,6 +47,43 @@ test.describe("app shell", () => {
     expect(await overflow()).toBeLessThanOrEqual(0);
   });
 
+  test("nav labels are readable and never broken mid-word, even at 1.3x", async ({
+    page,
+  }) => {
+    const labels = page.locator("nav [data-nav-label]");
+    const measure = () =>
+      labels.evaluateAll((spans) =>
+        spans.map((span) => {
+          const link = span.closest("a")!;
+          const range = document.createRange();
+          range.selectNodeContents(span);
+          const lines = new Set(
+            Array.from(range.getClientRects()).map((r) => Math.round(r.top)),
+          ).size;
+          return {
+            text: span.textContent!,
+            fontSize: parseFloat(getComputedStyle(span).fontSize),
+            words: span.textContent!.trim().split(/\s+/).length,
+            lines,
+            clipped: link.scrollWidth > link.clientWidth || span.scrollWidth > span.clientWidth,
+          };
+        }),
+      );
+    for (const size of ["1x", "1.3x"]) {
+      if (size === "1.3x") {
+        await page.getByRole("button", { name: "A+" }).click();
+        await page.getByRole("button", { name: "A+" }).click();
+      }
+      for (const label of await measure()) {
+        expect(label.fontSize, `${label.text} at ${size}`).toBeGreaterThanOrEqual(14);
+        expect(label.lines, `${label.text} wraps only at spaces at ${size}`).toBeLessThanOrEqual(
+          label.words,
+        );
+        expect(label.clipped, `${label.text} fits at ${size}`).toBe(false);
+      }
+    }
+  });
+
   test("every nav link and button is at least 48x48", async ({ page }) => {
     const targets = page.locator("aside a, aside button");
     expect(await targets.count()).toBeGreaterThanOrEqual(5);
