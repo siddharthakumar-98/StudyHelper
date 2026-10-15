@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createJob, runJobStep } from "@/modules/jobs/engine";
@@ -64,6 +65,35 @@ async function slidesOf(documentId: string) {
     .sort((a, b) => a.page_no - b.page_no || a.position_on_page - b.position_on_page);
 }
 
+/** Slide rows with ids and correction flags, ordered by page then position. */
+async function slideRows(documentId: string) {
+  const { data, error } = await service
+    .from("source_slides")
+    .select(
+      "id, page_id, position_on_page, verbatim_text, admin_corrected, source_pages!inner(page_no, document_id)",
+    )
+    .eq("source_pages.document_id", documentId);
+  expect(error).toBeNull();
+  return (data ?? [])
+    .map((row) => {
+      const { source_pages: page, ...slide } = row as typeof row & {
+        source_pages: { page_no: number };
+      };
+      return { ...slide, page_no: page.page_no };
+    })
+    .sort((a, b) => a.page_no - b.page_no || a.position_on_page - b.position_on_page);
+}
+
+const unnumbered = {
+  printed_slide_no: null,
+  title: null,
+  tables: [],
+  diagram_description: null,
+  legibility: "clear",
+  uncertain_terms: [],
+  cropped: false,
+};
+
 async function extractAll(documentId: string, deps: StepDeps = fakeDeps) {
   const store = new MemoryJobStore();
   const jobId = await createJob(store, "extract", documentId, {});
@@ -113,15 +143,6 @@ describe("extract stage", () => {
 
   it("keeps two unnumbered photos on one page as distinct slides", async () => {
     const documentId = await splitTwoPageDocument();
-    const unnumbered = {
-      printed_slide_no: null,
-      title: null,
-      tables: [],
-      diagram_description: null,
-      legibility: "clear",
-      uncertain_terms: [],
-      cropped: false,
-    };
     const ai = createFakeAiClient({
       // Both photos come back claiming position 1; the stage must still keep both.
       extract: () => ({
@@ -166,6 +187,75 @@ describe("extract stage", () => {
     const slides = await slidesOf(documentId);
     expect(slides).toHaveLength(2);
     expect(slides.map((s) => s.page_no)).toEqual([1, 2]);
+  });
+
+  it("re-extract keeps admin corrections, slide ids and topic links", async () => {
+    const documentId = await splitTwoPageDocument();
+    await extractAll(documentId);
+    const [first, second] = await slideRows(documentId);
+
+    await service
+      .from("source_slides")
+      .update({ verbatim_text: "Corrected by admin. Metformin 500 mg.", admin_corrected: true })
+      .eq("id", first.id);
+    const { data: topic } = await service
+      .from("topics")
+      .insert({ name: `Topic ${randomUUID()}` })
+      .select("id")
+      .single();
+    await service.from("slide_topics").insert({ slide_id: second.id, topic_id: topic!.id });
+
+    // An orphaned or retried extract job runs the whole document again.
+    await extractAll(documentId);
+
+    const after = await slideRows(documentId);
+    expect(after.map((s) => [s.id, s.verbatim_text, s.admin_corrected])).toEqual([
+      [first.id, "Corrected by admin. Metformin 500 mg.", true],
+      [second.id, "Fixture slide text for page 2. Metformin 500 mg.", false],
+    ]);
+    const { data: links } = await service
+      .from("slide_topics")
+      .select("slide_id")
+      .eq("topic_id", topic!.id);
+    expect(links).toEqual([{ slide_id: second.id }]);
+  });
+
+  it("re-extracting a page with fewer slides removes the extra one", async () => {
+    const documentId = await splitTwoPageDocument();
+    const twoPerPage = createFakeAiClient({
+      extract: () => ({
+        slides: [
+          { ...unnumbered, position_on_page: 1, verbatim_text: "Top photo" },
+          { ...unnumbered, position_on_page: 2, verbatim_text: "Bottom photo" },
+        ],
+      }),
+    });
+    await extractAll(documentId, { ai: twoPerPage, db });
+    const before = await slideRows(documentId);
+    expect(before.filter((s) => s.page_no === 1)).toHaveLength(2);
+
+    await extractAll(documentId);
+
+    const page1 = (await slideRows(documentId)).filter((s) => s.page_no === 1);
+    expect(page1.map((s) => [s.id, s.position_on_page, s.verbatim_text])).toEqual([
+      [before[0].id, 1, "Fixture slide text for page 1. Metformin 500 mg."],
+    ]);
+  });
+
+  it("an invalid slide leaves the page's earlier slides untouched", async () => {
+    const documentId = await splitTwoPageDocument();
+    await extractAll(documentId);
+    const before = await slideRows(documentId);
+
+    const { error } = await service.rpc("replace_page_slides", {
+      p_page_id: before[0].page_id,
+      p_slides: [
+        { ...unnumbered, position_on_page: 1, verbatim_text: "Should not be saved" },
+        { ...unnumbered, position_on_page: 2, verbatim_text: "Bad", legibility: "blurry" },
+      ],
+    });
+    expect(error?.message).toMatch(/legibility/);
+    expect(await slideRows(documentId)).toEqual(before);
   });
 
   it("a late duplicate split never deletes extracted slides", async () => {
