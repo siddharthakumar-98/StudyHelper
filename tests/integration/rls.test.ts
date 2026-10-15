@@ -116,6 +116,8 @@ describe("row level security", () => {
     expect(seeded).toHaveLength(1);
     const { data, error } = await studentClient.from("answer_keys").select("*");
     expect(error !== null || (data ?? []).length === 0).toBe(true);
+    // The revoke is in place: a privilege error (42501), not merely an RLS-empty result.
+    expect(error?.code).toBe("42501");
   });
 
   it("anon cannot select answer_keys", async () => {
@@ -135,12 +137,23 @@ describe("row level security", () => {
   it("student cannot insert, update or delete answer_keys", async () => {
     const topic = await seedTopic();
     const q = await seedQuestion(topic.id, "active", true);
+    // A version 2 exists, so the composite FK is satisfied: a denial here can
+    // only come from privileges/RLS, not from referential integrity.
+    const { error: vError } = await service.from("question_versions").insert({
+      question_id: q.id,
+      version: 2,
+      stem: "Second version",
+      source_refs: [],
+      basis_quote: "quote",
+    });
+    expect(vError).toBeNull();
     const ins = await studentClient.from("answer_keys").insert({
       question_id: q.id,
       version: 2,
       correct_option_id: "b",
     });
     expect(ins.error).not.toBeNull();
+    expect(ins.error!.code).toBe("42501");
     await studentClient
       .from("answer_keys")
       .update({ correct_option_id: "b" })
@@ -150,7 +163,7 @@ describe("row level security", () => {
       .from("answer_keys")
       .select("*")
       .eq("question_id", q.id);
-    expect(data).toHaveLength(1);
+    expect(data).toHaveLength(1); // only the service-seeded version 1 key
     expect(data![0].correct_option_id).toBe("a");
   });
 
