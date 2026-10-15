@@ -21,20 +21,48 @@ create index jobs_unfinished_idx on public.jobs (created_at) where status in ('p
 alter table public.jobs enable row level security;
 revoke all on public.jobs from anon, authenticated;
 
--- Atomically takes the step lock. Returns the row when claimed, no row otherwise.
+-- Atomically takes the step lock and counts the attempt at claim time, so a step
+-- killed by a function timeout still counts. Returns the row when claimed, null
+-- otherwise. A job claimed 3 times without a successful step (which resets
+-- attempts to 0) is marked failed here instead of being claimed a 4th time.
+-- Keep the limit (3) in step with MAX_ATTEMPTS in src/modules/jobs/engine.ts.
 create or replace function public.claim_job(p_job_id uuid, p_lock_seconds int)
 returns public.jobs
-language sql
+language plpgsql
 set search_path = public
 as $$
-  update public.jobs
-  set status = 'running',
-      locked_until = now() + make_interval(secs => p_lock_seconds),
-      updated_at = now()
+declare
+  r public.jobs;
+begin
+  select * into r
+  from public.jobs
   where id = p_job_id
     and status in ('pending', 'running')
     and (locked_until is null or locked_until < now())
-  returning *;
+  for update;
+  if not found then
+    return null;
+  end if;
+
+  if r.attempts >= 3 then
+    update public.jobs
+    set status = 'failed',
+        error = 'This step stopped unexpectedly 3 times. Please try again.',
+        locked_until = null,
+        updated_at = now()
+    where id = p_job_id;
+    return null;
+  end if;
+
+  update public.jobs
+  set status = 'running',
+      attempts = attempts + 1,
+      locked_until = now() + make_interval(secs => p_lock_seconds),
+      updated_at = now()
+  where id = p_job_id
+  returning * into r;
+  return r;
+end;
 $$;
 revoke execute on function public.claim_job(uuid, int) from public, anon, authenticated;
 grant execute on function public.claim_job(uuid, int) to service_role;

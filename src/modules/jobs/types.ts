@@ -40,9 +40,19 @@ export type JobSnapshot = {
 };
 
 export interface JobStore {
-  /** Atomically takes the step lock; null when the job is locked, done or failed. */
+  /**
+   * Atomically takes the step lock and counts the attempt. Null when the job is
+   * locked, done or failed (including when this claim exhausted its attempts).
+   */
   claim(id: string, lockSeconds: number): Promise<JobRow | null>;
-  save(row: JobRow): Promise<void>;
+  /**
+   * Saves a row only while the caller still holds the lock it claimed
+   * (`fenceLockedUntil` is the claimed row's locked_until). False = lock lost,
+   * nothing written.
+   */
+  save(row: JobRow, fenceLockedUntil: string | null): Promise<boolean>;
+  /** Failed -> pending with attempts 0, atomically. False when the job is not failed. */
+  reset(id: string): Promise<boolean>;
   insert(kind: JobKind, documentId: string, payload: Record<string, unknown>): Promise<string>;
   get(id: string): Promise<JobRow>;
 }

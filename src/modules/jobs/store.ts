@@ -16,14 +16,37 @@ export class SupabaseJobStore implements JobStore {
     return data && data.id ? data : null;
   }
 
-  async save(row: JobRow): Promise<void> {
+  async save(row: JobRow, fenceLockedUntil: string | null): Promise<boolean> {
     const { id, created_at: _created, ...fields } = row;
     void _created;
-    const { error } = await this.db
+    let query = this.db
       .from("jobs")
       .update({ ...fields, updated_at: new Date().toISOString() })
       .eq("id", id);
+    query =
+      fenceLockedUntil === null
+        ? query.is("locked_until", null)
+        : query.eq("locked_until", fenceLockedUntil);
+    const { data, error } = await query.select("id");
     if (error) throw new Error(`job save failed: ${error.message}`);
+    return data.length > 0;
+  }
+
+  async reset(id: string): Promise<boolean> {
+    const { data, error } = await this.db
+      .from("jobs")
+      .update({
+        status: "pending",
+        attempts: 0,
+        error: null,
+        locked_until: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .eq("status", "failed")
+      .select("id");
+    if (error) throw new Error(`job reset failed: ${error.message}`);
+    return data.length > 0;
   }
 
   async insert(
@@ -58,14 +81,31 @@ export class MemoryJobStore implements JobStore {
     const lockedUntil = row.locked_until ? Date.parse(row.locked_until) : 0;
     if (row.status !== "pending" && row.status !== "running") return null;
     if (lockedUntil >= now) return null;
+    if (row.attempts >= 3) {
+      row.status = "failed";
+      row.error = "This step stopped unexpectedly 3 times. Please try again.";
+      row.locked_until = null;
+      return null;
+    }
     row.status = "running";
+    row.attempts += 1;
     row.locked_until = new Date(now + lockSeconds * 1000).toISOString();
     row.updated_at = new Date(now).toISOString();
     return { ...row };
   }
 
-  async save(row: JobRow): Promise<void> {
+  async save(row: JobRow, fenceLockedUntil: string | null): Promise<boolean> {
+    const current = this.rows.get(row.id);
+    if (!current || current.locked_until !== fenceLockedUntil) return false;
     this.rows.set(row.id, { ...row, updated_at: new Date().toISOString() });
+    return true;
+  }
+
+  async reset(id: string): Promise<boolean> {
+    const row = this.rows.get(id);
+    if (!row || row.status !== "failed") return false;
+    Object.assign(row, { status: "pending", attempts: 0, error: null, locked_until: null });
+    return true;
   }
 
   async insert(

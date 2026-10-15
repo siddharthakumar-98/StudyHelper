@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AiRefusalError } from "@/modules/ai/errors";
+import type { JobRow } from "@/modules/jobs/types";
 import { createJob, resetJob, runJobStep } from "@/modules/jobs/engine";
 import { MemoryJobStore } from "@/modules/jobs/store";
 import type { JobHandler, JobKind } from "@/modules/jobs/types";
@@ -96,15 +97,58 @@ describe("runJobStep", () => {
     expect(snap).toMatchObject({ attempts: 0, error: null, status: "pending" });
   });
 
-  it("a non-retryable AI error fails the job immediately", async () => {
+  it("a refusal goes through the normal 3-attempt path", async () => {
     const { store, id, handlers } = await setup({
       split: async () => {
         throw new AiRefusalError();
       },
     });
+    expect(await runJobStep(store, handlers, id, deps)).toMatchObject({
+      status: "pending",
+      attempts: 1,
+    });
+    await runJobStep(store, handlers, id, deps);
+    expect(await runJobStep(store, handlers, id, deps)).toMatchObject({
+      status: "failed",
+      attempts: 3,
+    });
+  });
+
+  it("a claim that would exceed 3 attempts fails the job without running the handler", async () => {
+    const handler = vi.fn<JobHandler>();
+    const { store, id, handlers } = await setup({ split: handler });
+    // Three steps killed by a timeout: claimed, never saved.
+    for (let i = 0; i < 3; i++) {
+      expect(await store.claim(id, 0)).not.toBeNull();
+      await new Promise((r) => setTimeout(r, 2));
+    }
     const snap = await runJobStep(store, handlers, id, deps);
+    expect(handler).not.toHaveBeenCalled();
     expect(snap.status).toBe("failed");
-    expect(snap.attempts).toBe(1);
+    expect(snap.error).toContain("stopped unexpectedly");
+  });
+
+  it("save after a lost lock does not clobber the new owner's result", async () => {
+    const store = new MemoryJobStore();
+    const id = await createJob(store, "split", DOC, {});
+    const slow = (await store.claim(id, 0)) as JobRow;
+    await new Promise((r) => setTimeout(r, 2));
+    const fresh = (await store.claim(id, 300)) as JobRow; // lock expired; takeover
+    expect(fresh).not.toBeNull();
+    const stale: JobRow = { ...slow, status: "done", locked_until: null };
+    expect(await store.save(stale, slow.locked_until)).toBe(false);
+    expect((await store.get(id)).status).toBe("running");
+    const winner: JobRow = { ...fresh, status: "pending", step: 1, locked_until: null };
+    expect(await store.save(winner, fresh.locked_until)).toBe(true);
+    expect((await store.get(id)).step).toBe(1);
+  });
+
+  it("reset only affects a failed job", async () => {
+    const store = new MemoryJobStore();
+    const id = await createJob(store, "split", DOC, {});
+    await store.claim(id, 300); // another tab owns it now
+    expect(await store.reset(id)).toBe(false);
+    expect((await store.get(id)).status).toBe("running");
   });
 
   it("locked job returns snapshot without invoking handler", async () => {

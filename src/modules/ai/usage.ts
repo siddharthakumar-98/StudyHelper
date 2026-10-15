@@ -31,8 +31,9 @@ export function getAiClient(): AiClient {
     }
     return createFakeAiClient(DEFAULT_FAKE_RESPONDERS);
   }
+  // maxRetries is 0: the job engine owns retries, so one step stays under maxDuration (300 s).
   cached ??= createAnthropicAiClient(
-    new Anthropic({ maxRetries: 4, timeout: 280_000 }),
+    new Anthropic({ maxRetries: 0, timeout: 270_000 }),
     logAiCall,
   );
   return cached;

@@ -1,4 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/lib/supabase/database.types";
+import { SupabaseJobStore } from "@/modules/jobs/store";
 import { anonClient, createTestUser, resetDb, serviceClient, signedInClient } from "./helpers";
 
 const service = serviceClient();
@@ -45,6 +48,19 @@ describe("claim_job", () => {
     expect(await claim(id, 60)).not.toBeNull();
   });
 
+  it("counts attempts at claim time and fails the job on the 4th claim", async () => {
+    const id = await newJob();
+    for (let i = 1; i <= 3; i++) {
+      const row = (await claim(id, 1)) as { attempts: number } | null;
+      expect(row?.attempts).toBe(i);
+      await new Promise((resolve) => setTimeout(resolve, 1100)); // lock expires; no save
+    }
+    expect(await claim(id, 60)).toBeNull();
+    const { data } = await service.from("jobs").select("status, error, locked_until").eq("id", id).single();
+    expect(data).toMatchObject({ status: "failed", locked_until: null });
+    expect(data!.error).toContain("stopped unexpectedly");
+  });
+
   it("does not claim done or failed jobs", async () => {
     const id = await newJob();
     await service.from("jobs").update({ status: "done" }).eq("id", id);
@@ -60,5 +76,29 @@ describe("claim_job", () => {
       const read = await client.from("jobs").select("*");
       expect(read.error).not.toBeNull();
     }
+  });
+});
+
+describe("SupabaseJobStore fencing", () => {
+  const store = new SupabaseJobStore(service as unknown as SupabaseClient<Database>);
+
+  it("drops a save made after the lock was lost", async () => {
+    const id = await newJob();
+    const first = (await store.claim(id, 1))!;
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const second = (await store.claim(id, 60))!;
+    expect(await store.save({ ...first, status: "done", locked_until: null }, first.locked_until)).toBe(false);
+    expect((await store.get(id)).status).toBe("running");
+    expect(await store.save({ ...second, step: 1, status: "pending", locked_until: null }, second.locked_until)).toBe(true);
+    expect((await store.get(id)).step).toBe(1);
+  });
+
+  it("resets only a failed job", async () => {
+    const id = await newJob();
+    await store.claim(id, 60);
+    expect(await store.reset(id)).toBe(false);
+    await service.from("jobs").update({ status: "failed", locked_until: null, attempts: 3 }).eq("id", id);
+    expect(await store.reset(id)).toBe(true);
+    expect(await store.get(id)).toMatchObject({ status: "pending", attempts: 0 });
   });
 });

@@ -1,4 +1,3 @@
-import { AiError } from "@/modules/ai/errors";
 import type {
   JobContext,
   JobHandler,
@@ -38,18 +37,10 @@ export function toSnapshot(row: JobRow): JobSnapshot {
   };
 }
 
-/** Puts a failed job back to pending so the next step call retries it. */
+/** Puts a failed job back to pending; a no-op unless it is still failed. */
 export async function resetJob(store: JobStore, jobId: string): Promise<JobSnapshot> {
-  const row = await store.get(jobId);
-  const reset: JobRow = {
-    ...row,
-    status: "pending",
-    attempts: 0,
-    error: null,
-    locked_until: null,
-  };
-  await store.save(reset);
-  return toSnapshot(reset);
+  await store.reset(jobId);
+  return toSnapshot(await store.get(jobId));
 }
 
 /**
@@ -65,7 +56,7 @@ export async function runJobStepDetailed(
   const claimed = await store.claim(jobId, LOCK_SECONDS);
   if (!claimed) return { snapshot: toSnapshot(await store.get(jobId)), ran: false };
 
-  // Every path below ends in exactly one save that clears locked_until.
+  // Every path below ends in exactly one fenced save that clears locked_until.
   let outcome: JobRow;
   const handler = handlers[claimed.kind as JobKind];
   if (!handler) {
@@ -100,19 +91,20 @@ export async function runJobStepDetailed(
         }
       }
     } catch (err) {
-      const attempts = claimed.attempts + 1;
-      const permanent = err instanceof AiError && !err.retryable;
+      // claim_job already counted this attempt.
       outcome = {
         ...claimed,
-        attempts,
         error: err instanceof Error ? err.message : String(err),
-        status: permanent || attempts >= MAX_ATTEMPTS ? "failed" : "pending",
+        status: claimed.attempts >= MAX_ATTEMPTS ? "failed" : "pending",
       };
     }
   }
   outcome.locked_until = null;
-  await store.save(outcome);
-  return { snapshot: toSnapshot(outcome), ran: true };
+  // Fenced on the lock we claimed: if it expired and another runner took over,
+  // our result is dropped rather than clobbering theirs.
+  const saved = await store.save(outcome, claimed.locked_until);
+  const snapshot = saved ? toSnapshot(outcome) : toSnapshot(await store.get(jobId));
+  return { snapshot, ran: true };
 }
 
 export async function runJobStep(

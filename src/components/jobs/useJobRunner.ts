@@ -1,9 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { JobSnapshot } from "@/modules/jobs/types";
-
-const LOCKED_POLL_MS = 1500;
+import { decideNext, startJobId } from "./runnerLogic";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -28,14 +27,21 @@ export function useJobRunner(jobId: string | null): {
   const [snapshot, setSnapshot] = useState<JobSnapshot | null>(null);
   const [running, setRunning] = useState(false);
   const [attempt, setAttempt] = useState({ n: 0, retry: false });
+  const latest = useRef<JobSnapshot | null>(null);
+  const head = useRef<string | null>(null);
 
   useEffect(() => {
     if (!jobId) return;
+    if (head.current !== jobId) {
+      head.current = jobId;
+      latest.current = null;
+    }
     let cancelled = false;
     const controller = new AbortController();
 
-    async function loop(startId: string) {
-      let id = startId;
+    async function loop() {
+      // On a retry this is the failed job, which may be later in the chain.
+      let id = startJobId(jobId!, latest.current);
       let retry = attempt.retry;
       let last: JobSnapshot | null = null;
       setRunning(true);
@@ -59,24 +65,23 @@ export function useJobRunner(jobId: string | null): {
           last = (await res.json()) as JobSnapshot;
         } catch (err) {
           if (cancelled) return;
-          setSnapshot(failedSnapshot(id, last, err instanceof Error ? err.message : "Network error"));
+          const failed = failedSnapshot(id, last, err instanceof Error ? err.message : "Network error");
+          latest.current = failed;
+          setSnapshot(failed);
           break;
         }
         if (cancelled) return;
+        latest.current = last;
         setSnapshot(last);
-        if (last.status === "failed") break;
-        if (last.status === "done") {
-          if (!last.nextJobId) break;
-          id = last.nextJobId;
-          continue;
-        }
-        // "running" means another tab or the cron sweep holds the lock.
-        if (last.status === "running") await sleep(LOCKED_POLL_MS);
+        const decision = decideNext(last);
+        if (decision.action === "stop") break;
+        id = decision.id;
+        if (decision.delayMs > 0) await sleep(decision.delayMs);
       }
       if (!cancelled) setRunning(false);
     }
 
-    void loop(jobId);
+    void loop();
     return () => {
       cancelled = true;
       controller.abort();

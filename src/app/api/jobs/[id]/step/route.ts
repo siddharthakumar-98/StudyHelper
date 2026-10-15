@@ -30,15 +30,15 @@ export async function POST(
   const db = createServiceSupabase();
   const store = new SupabaseJobStore(db);
 
-  let existing;
   try {
-    existing = await store.get(id);
+    await store.get(id);
   } catch {
     return NextResponse.json({ error: "Job not found" }, { status: 404 });
   }
 
   const body = (await request.json().catch(() => null)) as { retry?: unknown } | null;
-  if (body?.retry === true && existing.status === "failed") {
+  if (body?.retry === true) {
+    // Conditional in the database: only a still-failed job is reset.
     await resetJob(store, id);
   }
 
