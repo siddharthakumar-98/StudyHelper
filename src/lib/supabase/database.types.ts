@@ -123,6 +123,26 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"jobs": {
+                  Row: {
+                    "attempts": number,"created_at": string,"document_id": string,"error": string | null,"id": string,"kind": string,"locked_until": string | null,"next_job_id": string | null,"payload": NonNullable<Json>,"progress": Json | null,"status": Database["public"]['Enums']["job_status"],"step": number,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "attempts"?: number,"created_at"?: string,"document_id": string,"error"?: string | null,"id"?: string,"kind": string,"locked_until"?: string | null,"next_job_id"?: string | null,"payload"?: NonNullable<Json>,"progress"?: Json | null,"status"?: Database["public"]['Enums']["job_status"],"step"?: number,"updated_at"?: string
+                  }
+                  Update: {
+                    "attempts"?: number,"created_at"?: string,"document_id"?: string,"error"?: string | null,"id"?: string,"kind"?: string,"locked_until"?: string | null,"next_job_id"?: string | null,"payload"?: NonNullable<Json>,"progress"?: Json | null,"status"?: Database["public"]['Enums']["job_status"],"step"?: number,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "jobs_document_id_fkey"
+      columns: ["document_id"]
+isOneToOne: false
+      referencedRelation: "documents"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"profiles": {
                   Row: {
                     "display_name": string | null,"id": string,"role": Database["public"]['Enums']["user_role"]
@@ -295,7 +315,29 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            "is_admin":
+            "claim_job":
+{ Args: { "p_job_id": string,"p_lock_seconds": number }; Returns: {
+              "attempts": number,
+"created_at": string,
+"document_id": string,
+"error": string | null,
+"id": string,
+"kind": string,
+"locked_until": string | null,
+"next_job_id": string | null,
+"payload": NonNullable<Json>,
+"progress": Json | null,
+"status": Database["public"]['Enums']["job_status"],
+"step": number,
+"updated_at": string
+            }
+                          SetofOptions: {
+        from: "*"
+        to: "jobs"
+        isOneToOne: true
+        isSetofReturn: false
+      } },
+"is_admin":
 { Args: Record<PropertyKey, never>; Returns: boolean
                            },
 "test_reset_app_tables":
