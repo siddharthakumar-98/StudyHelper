@@ -17,3 +17,13 @@ coverage/
 playwright-report/
 test-results/
 .vercel/
+
+# typescript / next generated
+*.tsbuildinfo
+next-env.d.ts
+*.pem
+npm-debug.log*
+
+# playwright
+/blob-report/
+/playwright/.cache/
