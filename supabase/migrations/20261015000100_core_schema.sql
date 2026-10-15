@@ -232,4 +232,6 @@ create policy question_flags_insert on public.question_flags
 create policy question_flags_select on public.question_flags
   for select to authenticated using (user_id = auth.uid() or public.is_admin());
 
--- answer_keys, generation_runs: RLS on, intentionally no policies.
+-- answer_keys, generation_runs: RLS on, intentionally no policies, and (defence in
+-- depth) no table privileges for client roles either. Service role only.
+revoke all on public.answer_keys, public.generation_runs from anon, authenticated;

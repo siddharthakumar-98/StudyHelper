@@ -114,15 +114,72 @@ describe("row level security", () => {
     await seedQuestion(topic.id, "active", true);
     const { data: seeded } = await service.from("answer_keys").select("*");
     expect(seeded).toHaveLength(1);
-    const { data } = await studentClient.from("answer_keys").select("*");
-    expect(data).toEqual([]);
+    const { data, error } = await studentClient.from("answer_keys").select("*");
+    expect(error !== null || (data ?? []).length === 0).toBe(true);
+  });
+
+  it("anon cannot select answer_keys", async () => {
+    const topic = await seedTopic();
+    await seedQuestion(topic.id, "active", true);
+    const { data, error } = await anonClient().from("answer_keys").select("*");
+    expect(error !== null || (data ?? []).length === 0).toBe(true);
   });
 
   it("admin cannot select answer_keys through the client either", async () => {
     const topic = await seedTopic();
     await seedQuestion(topic.id, "active", true);
-    const { data } = await adminClient.from("answer_keys").select("*");
-    expect(data).toEqual([]);
+    const { data, error } = await adminClient.from("answer_keys").select("*");
+    expect(error !== null || (data ?? []).length === 0).toBe(true);
+  });
+
+  it("student cannot insert, update or delete answer_keys", async () => {
+    const topic = await seedTopic();
+    const q = await seedQuestion(topic.id, "active", true);
+    const ins = await studentClient.from("answer_keys").insert({
+      question_id: q.id,
+      version: 2,
+      correct_option_id: "b",
+    });
+    expect(ins.error).not.toBeNull();
+    await studentClient
+      .from("answer_keys")
+      .update({ correct_option_id: "b" })
+      .eq("question_id", q.id);
+    await studentClient.from("answer_keys").delete().eq("question_id", q.id);
+    const { data } = await service
+      .from("answer_keys")
+      .select("*")
+      .eq("question_id", q.id);
+    expect(data).toHaveLength(1);
+    expect(data![0].correct_option_id).toBe("a");
+  });
+
+  it("student cannot change their own profiles.role", async () => {
+    await studentClient
+      .from("profiles")
+      .update({ role: "admin" })
+      .eq("id", student.id);
+    const { data } = await service
+      .from("profiles")
+      .select("role")
+      .eq("id", student.id)
+      .single();
+    expect(data!.role).toBe("student");
+  });
+
+  it("student cannot update or delete questions", async () => {
+    const topic = await seedTopic();
+    const q = await seedQuestion(topic.id, "active");
+    await studentClient
+      .from("questions")
+      .update({ status: "retired" })
+      .eq("id", q.id);
+    await studentClient.from("questions").delete().eq("id", q.id);
+    const { data } = await service
+      .from("questions")
+      .select("status")
+      .eq("id", q.id);
+    expect(data).toEqual([{ status: "active" }]);
   });
 
   it("student sees only active and flagged questions", async () => {
