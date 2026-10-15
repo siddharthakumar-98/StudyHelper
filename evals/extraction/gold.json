@@ -1,0 +1,232 @@
+{
+  "_note": "DRAFT gold set for 'IMA CGP FCD Class 1213March2026.pdf', drafted by Claude from 200-dpi renders. The developer must verify every token against the PDF before use. Tokens are recorded exactly as printed, slide typos included (e.g. '50 to 100 mg/d', 'Miglital', 'Repaglanide', 'Natiglanide', 'Pocine insulin'). Matching uses containsNormalized (case, dash, quote and whitespace insensitive). 'slide' is a human-readable label only; the runner ignores it.",
+  "slides": [
+    {
+      "slide": "Diabetic neuropathy (unnumbered)",
+      "page_no": 2,
+      "position_on_page": 2,
+      "expected_legibility": "clear",
+      "critical_tokens": [
+        "nortriptyline hydrochloride",
+        "50 to 100 mg/d",
+        "gabapentin",
+        "600 to 1200 mg/d",
+        "pregabalin",
+        "150 to 300 mg/d",
+        "topiramate",
+        "25 to 100 mg/d",
+        "duloxetine hydrochloride",
+        "40 to 60 mg/d",
+        "tramadol",
+        "oxycodone"
+      ]
+    },
+    {
+      "slide": "31 - BASAL & BOLUS Insulins",
+      "page_no": 8,
+      "position_on_page": 1,
+      "expected_legibility": "clear",
+      "critical_tokens": ["4:00", "8:00", "12:00", "16:00", "20:00", "24:00"]
+    },
+    {
+      "slide": "35. Noninsulin options for the treatment of T2D",
+      "page_no": 11,
+      "position_on_page": 1,
+      "expected_legibility": "clear",
+      "critical_tokens": [
+        "Metformin",
+        "Sulfonylureas",
+        "Meglitinides",
+        "Bromocriptine",
+        "Alpha-glucosidase inhibitors",
+        "Thiazolidinediones",
+        "Glucagon-like peptide-1",
+        "Dipeptidyl peptidase-4",
+        "DPP-4",
+        "SGLT-2 inhibitors"
+      ]
+    },
+    {
+      "slide": "41. The C:I ratio",
+      "page_no": 14,
+      "position_on_page": 1,
+      "expected_legibility": "clear",
+      "critical_tokens": ["C:I ratio", "X:1", "500/Total daily", "17g", "43g"]
+    },
+    {
+      "slide": "42. A correction factor (CF",
+      "page_no": 14,
+      "position_on_page": 2,
+      "expected_legibility": "clear",
+      "critical_tokens": ["N:1", "1650/TDD", "230 mg/dL", "130 mg/dL", "100 mg/dL", "100 ÷ 50 = 2"]
+    },
+    {
+      "slide": "43. The American Diabetes Association (ADA)",
+      "page_no": 15,
+      "position_on_page": 1,
+      "expected_legibility": "clear",
+      "critical_tokens": [
+        "<7.0%",
+        "≤6.5%",
+        "7-8%",
+        "<7%",
+        "< 7% to < 8%",
+        "6.5%",
+        "7%",
+        "6.0-7.0%"
+      ]
+    },
+    {
+      "slide": "44. General glycemic goals for T2D",
+      "page_no": 15,
+      "position_on_page": 2,
+      "expected_legibility": "clear",
+      "critical_tokens": ["6.0%", "7.0%", "8.0%"]
+    },
+    {
+      "slide": "59. Pregnancy is a ketogenic state",
+      "page_no": 23,
+      "position_on_page": 1,
+      "expected_legibility": "clear",
+      "critical_tokens": ["<200 mg/dL", "40%", "150 g"]
+    },
+    {
+      "slide": "60. GDM & OAD in GDM",
+      "page_no": 23,
+      "position_on_page": 2,
+      "expected_legibility": "clear",
+      "critical_tokens": [
+        "glyburide",
+        "metformin",
+        "Metformin HCl",
+        "129",
+        "165",
+        "Gliclazide",
+        "323",
+        "Glipizide",
+        "445",
+        "Glibenclamide",
+        "494",
+        "Acarbose",
+        "645",
+        "Miglital",
+        "207",
+        "Voglibose",
+        "267",
+        "Repaglanide",
+        "432",
+        "Natiglanide",
+        "317",
+        "Bovine insulin",
+        "5733",
+        "Pocine insulin",
+        "5777",
+        "Human insulin",
+        "5807",
+        "Aspart insulin",
+        "5831",
+        "MW 250-500",
+        "MW <1,000",
+        "MW <600"
+      ]
+    },
+    {
+      "slide": "70. Statins and aspirin in DM",
+      "page_no": 28,
+      "position_on_page": 2,
+      "expected_legibility": "clear",
+      "critical_tokens": [
+        "Statins",
+        "aspirin",
+        "5-year",
+        "10,000",
+        "<5%",
+        "≥5% to <10%",
+        "≥10% to <20%",
+        "≥20% to <30%",
+        "≥30%",
+        "1 fewer",
+        "20 more",
+        "3 fewer",
+        "21 more",
+        "6 fewer",
+        "26 more",
+        "10 fewer",
+        "28 more",
+        "13 fewer",
+        "60 more",
+        "17 fewer",
+        "62 more",
+        "20 fewer",
+        "74 more",
+        "27 fewer",
+        "78 more",
+        "37 fewer",
+        "94 more",
+        "49 fewer",
+        "98 more"
+      ]
+    },
+    {
+      "slide": "73 (number cut off) ... elements of DM in exercise",
+      "page_no": 30,
+      "position_on_page": 1,
+      "expected_legibility": "unreadable",
+      "critical_tokens": []
+    },
+    {
+      "slide": "Standardised CGM metrics for clinical care (unnumbered)",
+      "page_no": 34,
+      "position_on_page": 1,
+      "expected_legibility": "clear",
+      "critical_tokens": [
+        "14 days",
+        "70%",
+        "≤ 36%",
+        "> 250 mg/dl",
+        "181-250 mg/dl",
+        "70 -180 mg/dl",
+        "54-70 mg/dl",
+        "< 54 mg/dl"
+      ]
+    },
+    {
+      "slide": "83. LAA, long-acting insulin analogue; RAA ...; URAA ...",
+      "page_no": 34,
+      "position_on_page": 2,
+      "expected_legibility": "clear",
+      "critical_tokens": [
+        "long-acting insulin analogue",
+        "rapid-acting insulin analogue",
+        "ultra-rapid-acting insulin analogue",
+        "LAA + RAA or URAA",
+        "0.43%",
+        "4.7 mmol/mol"
+      ]
+    },
+    {
+      "slide": "90. Hypoglycemia can divided in to 3 levels",
+      "page_no": 38,
+      "position_on_page": 1,
+      "expected_legibility": "clear",
+      "critical_tokens": ["70 mg/dL", "54 mg/dL", "55 MG/DL", "40 MG/DL"]
+    },
+    {
+      "slide": "91. Hypoglycemia treatment",
+      "page_no": 38,
+      "position_on_page": 2,
+      "expected_legibility": "clear",
+      "critical_tokens": [
+        "< 70mg/dl",
+        "Glucose 25%",
+        "50 to 100 ml",
+        "10% dextrose",
+        "24 hours",
+        "48 hours",
+        "Glucagon",
+        "1mg SC/ IM",
+        "Sucrose"
+      ]
+    }
+  ]
+}
