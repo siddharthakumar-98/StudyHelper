@@ -120,6 +120,40 @@ describe("createAnthropicAiClient", () => {
     expect(result.usage).toEqual({ input: 10, output: 5, cacheRead: 0, cacheWrite: 0 });
   });
 
+  it("prices an unpriced served model at the requested model's rate", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { sdk } = fakeSdk({ model: "claude-unknown-x" });
+    const log = vi.fn<(row: AiCallLog) => Promise<void>>().mockResolvedValue();
+    const client = createAnthropicAiClient(sdk, log);
+    const result = await client.callStructured(input);
+
+    const usage = { input: 1000, output: 500, cacheRead: 2000, cacheWrite: 300 };
+    const expected = costUsd(MODEL_CONFIG.verify.model, usage);
+    expect(result.data).toEqual({ answer: "ok" });
+    expect(result.costUsd).toBe(expected);
+    expect(result.model).toBe("claude-unknown-x");
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "claude-unknown-x", costUsd: expected }),
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("still returns the result when the ledger insert fails", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { sdk } = fakeSdk({});
+    const log = vi.fn<(row: AiCallLog) => Promise<void>>().mockRejectedValue(new Error("db down"));
+    const client = createAnthropicAiClient(sdk, log);
+    const result = await client.callStructured(input);
+
+    expect(result.data).toEqual({ answer: "ok" });
+    expect(result.costUsd).toBe(
+      costUsd("claude-opus-5-5", { input: 1000, output: 500, cacheRead: 2000, cacheWrite: 300 }),
+    );
+    expect(error).toHaveBeenCalledTimes(1);
+    error.mockRestore();
+  });
+
   it("logs usage even when the call is refused", async () => {
     const { sdk } = fakeSdk({ stop_reason: "refusal", parsed_output: null });
     const log = vi.fn<(row: AiCallLog) => Promise<void>>().mockResolvedValue();

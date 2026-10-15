@@ -3,7 +3,7 @@ import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type { z } from "zod";
 import { AiParseError, AiRefusalError, AiTruncatedError } from "./errors";
 import { MODEL_CONFIG, type AiTask } from "./models";
-import { costUsd, type TokenUsage } from "./pricing";
+import { costUsd, PRICES_PER_MTOK, type TokenUsage } from "./pricing";
 
 export interface AiCallInput<T> {
   task: AiTask;
@@ -61,7 +61,17 @@ export function createAnthropicAiClient(
         cacheRead: response.usage.cache_read_input_tokens ?? 0,
         cacheWrite: response.usage.cache_creation_input_tokens ?? 0,
       };
-      const cost = costUsd(response.model, usage);
+      // Under server-side fallback the served model can be one we have no price
+      // for. Never lose a paid result over that: price at the requested model's
+      // rate and record the real served model name.
+      let pricedModel = response.model;
+      if (!(response.model in PRICES_PER_MTOK)) {
+        pricedModel = config.model;
+        console.warn(
+          `No price for served model "${response.model}"; pricing at requested model "${config.model}"`,
+        );
+      }
+      const cost = costUsd(pricedModel, usage);
 
       // Every call that consumed tokens is recorded, including refusals and
       // truncations. A ledger failure must not discard a paid-for result.
