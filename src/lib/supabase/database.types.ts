@@ -23,7 +23,27 @@ export type Database = {
           }
         },"public": {
           Tables: {
-            "answer_keys": {
+            "ai_calls": {
+                  Row: {
+                    "cache_read_tokens": number,"cache_write_tokens": number,"cost_usd": number,"created_at": string,"document_id": string | null,"id": string,"input_tokens": number,"model": string,"output_tokens": number,"prompt_version": string,"task": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "cache_read_tokens"?: number,"cache_write_tokens"?: number,"cost_usd"?: number,"created_at"?: string,"document_id"?: string | null,"id"?: string,"input_tokens"?: number,"model": string,"output_tokens"?: number,"prompt_version": string,"task": string
+                  }
+                  Update: {
+                    "cache_read_tokens"?: number,"cache_write_tokens"?: number,"cost_usd"?: number,"created_at"?: string,"document_id"?: string | null,"id"?: string,"input_tokens"?: number,"model"?: string,"output_tokens"?: number,"prompt_version"?: string,"task"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "ai_calls_document_id_fkey"
+      columns: ["document_id"]
+isOneToOne: false
+      referencedRelation: "documents"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"answer_keys": {
                   Row: {
                     "correct_option_id": string | null,"explanation": string | null,"key_concepts": Json | null,"model_answer": string | null,"question_id": string,"rubric": Json | null,"version": number
                   }
