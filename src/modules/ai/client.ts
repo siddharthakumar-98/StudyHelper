@@ -12,6 +12,8 @@ export interface AiCallInput<T> {
   content: Anthropic.Beta.BetaContentBlockParam[];
   schema: z.ZodType<T>;
   documentId?: string;
+  /** Caller context that is never sent to the model; deterministic fakes answer from it. */
+  meta?: Record<string, string | number>;
 }
 
 export interface AiCallResult<T> {

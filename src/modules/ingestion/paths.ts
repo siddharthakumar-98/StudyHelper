@@ -24,3 +24,15 @@ export type PageExt = "pdf" | "jpg" | "png";
 export function pagePath(documentId: string, pageNo: number, ext: PageExt): string {
   return `materials/${documentId}/pages/${String(pageNo).padStart(4, "0")}.${ext}`;
 }
+
+export const PAGE_MIME: Record<PageExt, string> = {
+  pdf: "application/pdf",
+  jpg: "image/jpeg",
+  png: "image/png",
+};
+
+/** The MIME type of a stored page, from its extension; undefined if unknown. */
+export function pageMime(storagePath: string): string | undefined {
+  const ext = storagePath.split(".").pop() ?? "";
+  return Object.hasOwn(PAGE_MIME, ext) ? PAGE_MIME[ext as PageExt] : undefined;
+}

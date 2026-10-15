@@ -100,6 +100,27 @@ describe("upload + split", () => {
     expect(await pagesOf(documentId)).toHaveLength(3);
   });
 
+  it("a duplicate split never moves the document's status backwards", async () => {
+    const { documentId } = await uploadFixtureDocument();
+    const store = new MemoryJobStore();
+    const jobId = await createJob(store, "split", documentId, {});
+    await runJobStep(store, JOB_HANDLERS, jobId, deps);
+    expect((await runJobStep(store, JOB_HANDLERS, jobId, deps)).status).toBe("done");
+    await service.from("documents").update({ status: "ready" }).eq("id", documentId);
+
+    const rerunStore = new MemoryJobStore();
+    const rerun = await createJob(rerunStore, "split", documentId, {});
+    await runJobStep(rerunStore, JOB_HANDLERS, rerun, deps);
+    expect((await runJobStep(rerunStore, JOB_HANDLERS, rerun, deps)).status).toBe("done");
+
+    const { data: doc } = await service
+      .from("documents")
+      .select("page_count, status")
+      .eq("id", documentId)
+      .single();
+    expect(doc).toEqual({ page_count: 3, status: "ready" });
+  });
+
   it("finalize checks the files exist and creates one split job", async () => {
     const admin = await createTestUser("admin");
     const { documentId, uploads } = await createUploadRecords(service, admin.id, {

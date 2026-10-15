@@ -11,7 +11,8 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test",
     "typecheck": "next typegen && tsc --noEmit",
-    "seed:users": "tsx --env-file=.env.local scripts/seed-users.ts"
+    "seed:users": "tsx --env-file=.env.local scripts/seed-users.ts",
+    "eval:extraction": "tsx --env-file=.env.local evals/extraction/run.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.134.0",

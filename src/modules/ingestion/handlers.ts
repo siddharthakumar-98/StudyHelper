@@ -1,18 +1,17 @@
-import { MATERIALS_BUCKET, pagePath, type PageExt } from "./paths";
-import { splitPdf } from "./splitPdf";
+import type { Json } from "@/lib/supabase/database.types";
 import type { JobHandler } from "@/modules/jobs/types";
+import { extractPage } from "./extractSlides";
+import { MATERIALS_BUCKET, PAGE_MIME, pageMime, pagePath, type PageExt } from "./paths";
+import { splitPdf } from "./splitPdf";
 
 const IMAGE_EXT: Record<string, PageExt> = { "image/jpeg": "jpg", "image/png": "png" };
-const IMAGE_MIME: Record<PageExt, string> = {
-  pdf: "application/pdf",
-  jpg: "image/jpeg",
-  png: "image/png",
-};
 
 /**
  * Step i turns file i into numbered pages. Idempotent per file: it first removes
  * that file's earlier pages (rows and objects), so a retry or a duplicate run
  * leaves the same rows. The last step records the page count and hands over to extract.
+ * Once slides have been extracted a (late, duplicate) split is a no-op: deleting
+ * the pages would cascade-delete the slides.
  */
 export const splitHandler: JobHandler = async ({ db, documentId, step }) => {
   const storage = db.storage.from(MATERIALS_BUCKET);
@@ -24,6 +23,20 @@ export const splitHandler: JobHandler = async ({ db, documentId, step }) => {
     .order("file_index");
   if (filesError) throw new Error(`Could not read the handout's files: ${filesError.message}`);
   if (files.length === 0) throw new Error("This handout has no files to split");
+
+  const { count: slideCount, error: slidesError } = await db
+    .from("source_slides")
+    .select("id, source_pages!inner(document_id)", { count: "exact", head: true })
+    .eq("source_pages.document_id", documentId);
+  if (slidesError || slideCount === null) {
+    throw new Error(`Could not check for extracted slides: ${slidesError?.message ?? "unknown error"}`);
+  }
+  if (slideCount > 0) {
+    return {
+      done: true,
+      progress: { current: files.length, total: files.length, label: "Pages already read" },
+    };
+  }
 
   const file = files.find((f) => f.file_index === step);
   if (!file) throw new Error(`Handout file ${step + 1} was not found`);
@@ -83,7 +96,7 @@ export const splitHandler: JobHandler = async ({ db, documentId, step }) => {
   for (const page of pages) {
     const path = pagePath(documentId, page.pageNo, page.ext);
     const { error } = await storage.upload(path, page.body, {
-      contentType: IMAGE_MIME[page.ext],
+      contentType: PAGE_MIME[page.ext],
       upsert: true,
     });
     if (error) throw new Error(`Could not save page ${page.pageNo}: ${error.message}`);
@@ -113,10 +126,12 @@ export const splitHandler: JobHandler = async ({ db, documentId, step }) => {
   if (countError || count === null) {
     throw new Error(`Could not count pages: ${countError?.message ?? "unknown error"}`);
   }
+  // Only moves the status forward: a duplicate split must not undo later stages.
   const { error: updateError } = await db
     .from("documents")
     .update({ page_count: count, status: "processing" })
-    .eq("id", documentId);
+    .eq("id", documentId)
+    .in("status", ["uploading", "splitting"]);
   if (updateError) throw new Error(`Could not update the handout: ${updateError.message}`);
 
   return {
@@ -124,4 +139,53 @@ export const splitHandler: JobHandler = async ({ db, documentId, step }) => {
     progress: { current: files.length, total: files.length, label: `Split into ${count} pages` },
     next: { kind: "extract", payload: {} },
   };
+};
+
+/**
+ * Step i reads the i-th page (by page_no) into slides. Each step replaces that
+ * page's slides in one transaction, so retries and duplicates never add rows.
+ * The last step hands over to topic_map.
+ */
+export const extractHandler: JobHandler = async ({ db, ai, documentId, step }) => {
+  const { data: pages, error: pagesError } = await db
+    .from("source_pages")
+    .select("id, page_no, kind, storage_path")
+    .eq("document_id", documentId)
+    .order("page_no");
+  if (pagesError) throw new Error(`Could not read the handout's pages: ${pagesError.message}`);
+  if (pages.length === 0) throw new Error("This handout has no pages to read");
+
+  const page = pages[step];
+  if (!page) throw new Error(`Page ${step + 1} was not found`);
+  const total = pages.length;
+
+  const mime = pageMime(page.storage_path);
+  if (!mime) throw new Error(`Page ${page.page_no} has an unknown file type`);
+
+  const { data: blob, error: downloadError } = await db.storage
+    .from(MATERIALS_BUCKET)
+    .download(page.storage_path);
+  if (downloadError || !blob) {
+    throw new Error(`Could not read page ${page.page_no}: ${downloadError?.message ?? "missing"}`);
+  }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+
+  const slides = await extractPage(
+    { kind: page.kind, storagePath: page.storage_path, mime, pageNo: page.page_no },
+    bytes,
+    ai,
+    documentId,
+  );
+
+  const { error: replaceError } = await db.rpc("replace_page_slides", {
+    p_page_id: page.id,
+    p_slides: slides as Json,
+  });
+  if (replaceError) {
+    throw new Error(`Could not save the slides of page ${page.page_no}: ${replaceError.message}`);
+  }
+
+  const progress = { current: step + 1, total, label: `Reading page ${step + 1} of ${total}` };
+  if (step < total - 1) return { done: false, progress };
+  return { done: true, progress, next: { kind: "topic_map", payload: {} } };
 };

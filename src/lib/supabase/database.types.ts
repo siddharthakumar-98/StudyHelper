@@ -340,6 +340,9 @@ isOneToOne: false
 "is_admin":
 { Args: Record<PropertyKey, never>; Returns: boolean
                            },
+"replace_page_slides":
+{ Args: { "p_page_id": string,"p_slides": Json }; Returns: number
+                           },
 "test_reset_app_tables":
 { Args: Record<PropertyKey, never>; Returns: undefined
                            }
