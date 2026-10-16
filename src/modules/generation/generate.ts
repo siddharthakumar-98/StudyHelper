@@ -2,7 +2,6 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { AiClient } from "@/modules/ai/client";
 import { GENERATE_QUESTIONS_PROMPT } from "@/modules/ai/prompts/generateQuestions";
 import { GenerationResultSchema, type GenerationResult } from "@/modules/ai/schemas/generation";
-import { slideExcerpt } from "./topicMap";
 
 export type SlideForGeneration = {
   id: string;
@@ -99,10 +98,72 @@ function slideBlock(slide: SlideForGeneration, alias: string): string {
   return lines.join("\n");
 }
 
-/** A read-only excerpt of a topic slide outside the batch, so cross-batch contradictions are visible. */
+/** Most characters of one context slide's excerpt. */
+export const CONTEXT_EXCERPT_CHARS = 500;
+/** Most characters of the whole "Other slides in this topic" block. */
+export const CONTEXT_BLOCK_CHARS = 12_000;
+
+/** Lines with numbers, formulas or thresholds: where slides contradict each other. */
+const NUMERIC_LINE = /[0-9=<>≤≥/]/;
+
+/**
+ * A context slide's content in at most 500 characters: its text, table rows and
+ * diagram description, with lines that carry numbers or formulas first (so a
+ * "450/TDD" in a table survives a long prose slide), then the rest, each group in
+ * slide order. Lines are dropped whole; only a single over-long first line is cut.
+ */
+export function contextExcerpt(slide: SlideForGeneration): string {
+  const lines = [
+    ...slide.verbatim_text.split("\n"),
+    ...tableLines(slide.tables),
+    ...(slide.diagram_description ?? "").split("\n"),
+  ]
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const ordered = [
+    ...lines.filter((line) => NUMERIC_LINE.test(line)),
+    ...lines.filter((line) => !NUMERIC_LINE.test(line)),
+  ];
+  let excerpt = "";
+  for (const line of ordered) {
+    const next = excerpt ? `${excerpt} / ${line}` : line;
+    if (next.length > CONTEXT_EXCERPT_CHARS) {
+      if (!excerpt) excerpt = line.slice(0, CONTEXT_EXCERPT_CHARS);
+      break;
+    }
+    excerpt = next;
+  }
+  return excerpt;
+}
+
 function contextBlock(slide: SlideForGeneration, ref: string): string {
-  const excerpt = slideExcerpt(slide).replace(/\s*\n\s*/g, " / ");
-  return [`(${ref}) ${slide.label}`, `Title: ${slide.title ?? "(none)"}`, `Excerpt: ${excerpt || "(none)"}`].join("\n");
+  return [
+    `(${ref}) ${slide.label}`,
+    `Title: ${slide.title ?? "(none)"}`,
+    `Excerpt: ${contextExcerpt(slide) || "(none)"}`,
+  ].join("\n");
+}
+
+/**
+ * The read-only "Other slides in this topic" section, at most 12,000 characters:
+ * whole trailing slides past the cap are left out, and the section says so.
+ */
+function contextSection(slides: SlideForGeneration[]): string {
+  const heading = "Other slides in this topic (context only, never cite or quote these):";
+  const blocks: string[] = [];
+  let length = heading.length;
+  for (const [i, slide] of slides.entries()) {
+    const block = contextBlock(slide, `C${i + 1}`);
+    if (length + 2 + block.length > CONTEXT_BLOCK_CHARS) break;
+    blocks.push(block);
+    length += 2 + block.length;
+  }
+  const omitted = slides.length - blocks.length;
+  const note =
+    omitted > 0
+      ? [`(${plural(omitted, "more slide")} of this topic left out to keep this list short.)`]
+      : [];
+  return [heading, ...blocks, ...note].join("\n\n");
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -148,11 +209,7 @@ export async function generateForTopic(
   ];
   const context = input.contextSlides ?? [];
   if (context.length > 0) {
-    sections.push(
-      `Other slides in this topic (context only, never cite or quote these):\n\n${context
-        .map((slide, i) => contextBlock(slide, `C${i + 1}`))
-        .join("\n\n")}`,
-    );
+    sections.push(contextSection(context));
   }
   const text = sections.join("\n\n");
 

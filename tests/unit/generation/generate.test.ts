@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONTEXT_BLOCK_CHARS,
+  CONTEXT_EXCERPT_CHARS,
+  contextExcerpt,
   generateForTopic,
   planTopicBatches,
   targetsFor,
@@ -160,10 +163,7 @@ describe("generateForTopic", () => {
 
   it("shows the topic's other slides as a read-only block with non-citable refs", async () => {
     const { ai, calls } = recordingAi();
-    const other = slide(86, {
-      title: "Insulin ratios",
-      verbatim_text: "C:I ratio = 450/TDD\nCorrection factor = 2000/TDD " + "x".repeat(400),
-    });
+    const other = slide(86, { title: "Insulin ratios", verbatim_text: "C:I ratio = 450/TDD" });
     await generateForTopic(
       { ...baseInput([slide(41)]), contextSlides: [other, slide(87, { verbatim_text: "" })] },
       ai,
@@ -172,12 +172,53 @@ describe("generateForTopic", () => {
     const text = textOf(calls[0]);
     const block = text.slice(text.indexOf("Other slides in this topic (context only, never cite or quote these):"));
     expect(block).not.toBe(text);
-    expect(block).toContain("(C1) Slide 86\nTitle: Insulin ratios\nExcerpt: C:I ratio = 450/TDD / Correction factor = 2000/TDD");
-    expect(block).toContain("(C2) Slide 87");
-    expect(block).not.toContain("x".repeat(300)); // excerpts stay short
+    expect(block).toContain("(C1) Slide 86\nTitle: Insulin ratios\nExcerpt: C:I ratio = 450/TDD");
+    expect(block).toContain("(C2) Slide 87\nTitle: Title 87\nExcerpt: (none)");
     expect(block).not.toContain("[S");
+    expect(block).not.toContain("left out");
     expect(text).not.toContain("slide-86");
     expect(text.indexOf("[S1] Slide 41")).toBeLessThan(text.indexOf("(C1) Slide 86"));
+  });
+
+  it("keeps numbers that live only in a context slide's tables or diagram, ahead of long prose", async () => {
+    const prose = Array.from(
+      { length: 12 },
+      (_, i) => `Insulin dosing should always be individualised for each patient in practice, point ${"abcdefghijkl"[i]}.`,
+    ).join("\n");
+    expect(prose.length).toBeGreaterThan(500);
+    const other = slide(86, {
+      verbatim_text: prose,
+      tables: [{ caption: null, rows: [["Ratio", "Formula"], ["C:I ratio", "450/TDD"]] }],
+      diagram_description: "Box: Correction factor = 2000/TDD",
+    });
+    const excerpt = contextExcerpt(other);
+    expect(excerpt.length).toBeLessThanOrEqual(CONTEXT_EXCERPT_CHARS);
+    expect(excerpt.startsWith("C:I ratio | 450/TDD / Box: Correction factor = 2000/TDD")).toBe(true);
+    expect(excerpt).toContain("Insulin dosing should always"); // prose fills the rest
+    expect(excerpt.endsWith(".")).toBe(true); // lines are dropped whole
+
+    const { ai, calls } = recordingAi();
+    await generateForTopic({ ...baseInput([slide(41)]), contextSlides: [other] }, ai, DOC_ID);
+    expect(textOf(calls[0])).toContain("450/TDD");
+    expect(textOf(calls[0])).toContain("2000/TDD");
+  });
+
+  it("caps the context block, leaving out whole trailing slides and saying so", async () => {
+    const long = (n: number) =>
+      slide(n, { verbatim_text: Array.from({ length: 10 }, () => `Line about dose ${n} ${"y".repeat(50)}`).join("\n") });
+    const context = Array.from({ length: 40 }, (_, i) => long(100 + i));
+    const { ai, calls } = recordingAi();
+    await generateForTopic({ ...baseInput([slide(1)]), contextSlides: context }, ai, DOC_ID);
+    const text = textOf(calls[0]);
+    const block = text.slice(text.indexOf("Other slides in this topic"));
+    const kept = (block.match(/^\(C\d+\) /gm) ?? []).length;
+    expect(kept).toBeGreaterThan(10);
+    expect(kept).toBeLessThan(40);
+    expect(block).toContain(`(${40 - kept} more slides of this topic left out to keep this list short.)`);
+    const listed = block.slice(0, block.indexOf(`(${40 - kept} more slides`)).trimEnd();
+    expect(listed.length).toBeLessThanOrEqual(CONTEXT_BLOCK_CHARS);
+    // The last kept slide is complete.
+    expect(listed.endsWith(contextExcerpt(context[kept - 1]))).toBe(true);
   });
 
   it("a question citing a context-only slide fails the pre-check", async () => {
