@@ -93,7 +93,7 @@ Uploading a second handout that overlaps the first reuses existing topics, and q
 | `npm run typecheck` | `next typegen && tsc --noEmit` |
 | `npm run lint` | ESLint |
 
-The e2e suite always runs with `AI_FAKE=1`: the fake client returns deterministic extraction and questions, so e2e never spends money. Run `AI_FAKE=1 npm run dev` yourself if you want to click through the app without spending anything.
+The e2e suite starts its own dev server with `AI_FAKE=1`: the fake client returns deterministic extraction and questions, so e2e spends nothing. But Playwright reuses any server already listening on port 3000, and that server may be using your real API key. Stop any other dev server before running `npm run test:e2e`, or start the server yourself with `AI_FAKE=1 npm run dev` and leave it running. The same command is the way to click through the app without spending anything.
 
 The e2e specs share one local database and reset it, so run them on a throwaway local stack, not one holding a handout you care about.
 
@@ -113,7 +113,7 @@ Before you run the two paid evals:
 - `evals/extraction/gold.json` must be verified by you against the PDF first. The eval trusts it as ground truth, so a wrong token in it produces a wrong score.
 - The extraction eval needs a handout that has already been uploaded and split (use its document id from the URL of the handout page).
 
-The audit file contains correct answers, so treat it as admin-only. Fill in the checklist columns (Supported by slide, Single best answer / rubric sound, Unambiguous, Difficulty right, Source correct, Notes) while looking at the slide photos, fix or reject any question that fails in the Question Bank, then commit the file. The target is at least 90% of audited questions passing every column, with no unsupported facts.
+The audit file contains correct answers, so treat it as admin-only. Fill in the checklist columns (Supported by slide, Single best answer / rubric sound, Unambiguous, Difficulty right, Source correct, Notes) while looking at the slide photos, fix or reject any question that fails in the Question Bank, then commit the file. Because it contains answer keys, commit it only to a private repository; if the repository is or may become public, keep the file out of git and share it privately instead. The target is at least 90% of audited questions passing every column, with no unsupported facts.
 
 ## Cost
 
