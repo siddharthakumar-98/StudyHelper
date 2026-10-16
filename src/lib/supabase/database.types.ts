@@ -315,7 +315,10 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            "claim_job":
+            "apply_topic_map":
+{ Args: { "p_document_id": string,"p_topics": Json }; Returns: string
+                           },
+"claim_job":
 { Args: { "p_job_id": string,"p_lock_seconds": number }; Returns: {
               "attempts": number,
 "created_at": string,

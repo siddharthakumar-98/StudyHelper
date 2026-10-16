@@ -3,7 +3,7 @@ import { loginAs } from "./helpers";
 import { makePdf } from "../fixtures/makePdf";
 
 // AI_FAKE=1 (set by the Playwright web server): one clear slide per page. The
-// pipeline then stops at topic_map, which has no handler yet; only slides are asserted.
+// pipeline then stops at generate, which has no handler yet; only slides are asserted.
 
 async function uploadTwoPageHandout(page: Page, title: string): Promise<string> {
   await page.goto("/materials");
