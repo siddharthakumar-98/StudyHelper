@@ -17,8 +17,21 @@ async function uploadTwoPageHandout(page: Page, title: string): Promise<string> 
     },
   ]);
   await page.getByRole("button", { name: "Add handout" }).click();
-  await expect(page).toHaveURL(/\/materials\/[0-9a-f-]{36}/, { timeout: 90_000 });
+  // Wait for the final URL: the form pushes ?job=... and a later goto must not race it.
+  await expect(page).toHaveURL(/\/materials\/[0-9a-f-]{36}\?job=/, { timeout: 90_000 });
   return new URL(page.url()).pathname;
+}
+
+/**
+ * Opens the handout in a fresh tab and closes the upload tab. The upload tab keeps
+ * driving the pipeline and calls router.refresh() as each stage ends, which would
+ * interrupt a goto issued from it ("interrupted by another navigation").
+ */
+async function reopen(page: Page, docPath: string): Promise<Page> {
+  const fresh = await page.context().newPage();
+  await fresh.goto(docPath);
+  await page.close();
+  return fresh;
 }
 
 const card = (page: Page, n: number) =>
@@ -47,7 +60,7 @@ test.describe("slide review", () => {
     await first.getByLabel("Slide text").fill("Corrected text. Metformin 850 mg.");
     await first.getByRole("button", { name: "Save correction" }).click();
     await expect(first.getByText("Corrected", { exact: true })).toBeVisible();
-    await page.goto(docPath);
+    page = await reopen(page, docPath);
     await expect(card(page, 1).getByLabel("Slide text")).toHaveValue(
       "Corrected text. Metformin 850 mg.",
     );
@@ -104,7 +117,7 @@ test.describe("slide review", () => {
       .eq("page_id", slidePage!.id);
     expect(error).toBeNull();
 
-    await page.goto(docPath);
+    page = await reopen(page, docPath);
     await expect(card(page, 2).getByText("Partly readable", { exact: true })).toBeVisible();
     await expect(card(page, 2).locator("mark")).toHaveText("glipizide");
     await page.getByRole("checkbox", { name: "Show only slides that need checking" }).check();

@@ -48,6 +48,12 @@ export const topicMapHandler: JobHandler = async ({ db, ai, documentId }) => {
     slides.filter((s) => s.legibility !== "unreadable").map((s) => s.id),
   );
 
+  if (reconciled.droppedIds.length > 0) {
+    console.warn(
+      `topic_map: dropped ${reconciled.droppedIds.length} unknown slide id(s) from the model's answer for document ${documentId}`,
+    );
+  }
+
   const { data: runId, error: applyError } = await db.rpc("apply_topic_map", {
     p_document_id: documentId,
     p_topics: reconciled.topics.map((t) => ({ name: t.name, slide_ids: t.slideIds })),

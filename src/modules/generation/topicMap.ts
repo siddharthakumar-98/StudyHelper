@@ -40,9 +40,9 @@ export function slideExcerpt(slide: ExcerptSource): string {
   return parts.filter(Boolean).join("\n").slice(0, EXCERPT_LENGTH);
 }
 
-function slideBlock(slide: TopicMapSlide): string {
+function slideBlock(slide: TopicMapSlide, alias: string): string {
   return [
-    `id: ${slide.id}`,
+    `id: ${alias}`,
     `label: ${slide.label}`,
     `title: ${slide.title ?? "(none)"}`,
     `legibility: ${slide.legibility}`,
@@ -50,17 +50,28 @@ function slideBlock(slide: TopicMapSlide): string {
   ].join("\n");
 }
 
-/** Asks the model to group a handout's slides into topics, reusing existing topic names. */
+/**
+ * Asks the model to group a handout's slides into topics, reusing existing topic
+ * names. The model sees short aliases (S1, S2, ...) instead of slide ids, which
+ * keeps its answer small; they are mapped back here. An alias the model invents
+ * stays as it is, so reconcileTopicMap drops and reports it like any unknown id.
+ */
 export async function buildTopicMap(
   slides: TopicMapSlide[],
   existingTopicNames: string[],
   ai: AiClient,
   documentId: string,
 ): Promise<TopicMap> {
+  const aliases = slides.map((_, i) => `S${i + 1}`);
+  const idOf = new Map(aliases.map((alias, i) => [alias, slides[i].id]));
+  const back = (alias: string) => idOf.get(alias.trim()) ?? alias;
+
   const existing = existingTopicNames.length
     ? existingTopicNames.map((name) => `- ${name}`).join("\n")
     : "(none yet)";
-  const text = `Existing topic names:\n${existing}\n\nSlides:\n\n${slides.map(slideBlock).join("\n\n")}`;
+  const text = `Existing topic names:\n${existing}\n\nSlides:\n\n${slides
+    .map((slide, i) => slideBlock(slide, aliases[i]))
+    .join("\n\n")}`;
   const { data } = await ai.callStructured({
     task: "topicMap",
     promptVersion: TOPIC_MAP_PROMPT.version,
@@ -68,16 +79,16 @@ export async function buildTopicMap(
     content: [{ type: "text", text }],
     schema: TopicMapSchema,
     documentId,
-    // Not sent to the model; lets the fake AI answer with valid slide ids.
+    // Not sent to the model; lets the fake AI answer with valid aliases.
     meta: {
-      slideIds: slides.map((s) => s.id).join(","),
-      readableSlideIds: slides
-        .filter((s) => s.legibility !== "unreadable")
-        .map((s) => s.id)
-        .join(","),
+      slideAliases: aliases.join(","),
+      readableSlideAliases: aliases.filter((_, i) => slides[i].legibility !== "unreadable").join(","),
     },
   });
-  return data;
+  return {
+    topics: data.topics.map((t) => ({ ...t, slide_ids: t.slide_ids.map(back) })),
+    unassigned: data.unassigned.map((u) => ({ ...u, slide_id: back(u.slide_id) })),
+  };
 }
 
 export type ReconciledTopicMap = {
@@ -92,7 +103,8 @@ const MAX_TOPICS_PER_SLIDE = 2;
  * Makes the model's answer safe to save: unknown ids are dropped (and reported),
  * topics with the same name (ignoring case) are merged, a slide keeps only its
  * first 2 topics, empty topics go, and every readable slide the model forgot is
- * listed as unassigned.
+ * listed as unassigned. Only readable slides can be assigned: an unreadable slide
+ * the model put in a topic is taken out and reported as unassigned ("unreadable").
  */
 export function reconcileTopicMap(
   map: TopicMap,
@@ -100,7 +112,9 @@ export function reconcileTopicMap(
   readableSlideIds: string[],
 ): ReconciledTopicMap {
   const known = new Set(allSlideIds);
+  const readable = new Set(readableSlideIds);
   const dropped = new Set<string>();
+  const unreadableAssigned = new Set<string>();
 
   const merged = new Map<string, { name: string; slideIds: string[] }>();
   for (const topic of map.topics) {
@@ -111,6 +125,7 @@ export function reconcileTopicMap(
     merged.set(key, entry);
     for (const id of topic.slide_ids) {
       if (!known.has(id)) dropped.add(id);
+      else if (!readable.has(id)) unreadableAssigned.add(id);
       else if (!entry.slideIds.includes(id)) entry.slideIds.push(id);
     }
   }
@@ -134,6 +149,12 @@ export function reconcileTopicMap(
     else if (!topicCount.has(item.slide_id) && !listed.has(item.slide_id)) {
       listed.add(item.slide_id);
       unassigned.push({ slideId: item.slide_id, reason: item.reason });
+    }
+  }
+  for (const id of unreadableAssigned) {
+    if (!listed.has(id)) {
+      listed.add(id);
+      unassigned.push({ slideId: id, reason: "unreadable" });
     }
   }
   for (const id of readableSlideIds) {

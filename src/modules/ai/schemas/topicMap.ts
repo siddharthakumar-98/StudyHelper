@@ -4,7 +4,7 @@ export const TopicMapSchema = z.object({
   topics: z.array(
     z.object({
       name: z.string().describe("Short clinical heading, or an existing topic name copied verbatim"),
-      slide_ids: z.array(z.string()).describe("The ids of the slides under this topic, copied exactly"),
+      slide_ids: z.array(z.string()).describe("The short ids (such as S12) of the slides under this topic, copied exactly"),
     }),
   ),
   unassigned: z.array(

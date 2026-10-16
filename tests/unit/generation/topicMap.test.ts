@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildTopicMap, reconcileTopicMap, slideExcerpt } from "@/modules/generation/topicMap";
 import { TOPIC_MAP_PROMPT } from "@/modules/ai/prompts/topicMap";
-import { createFakeAiClient } from "@/modules/ai/fake";
+import { createFakeAiClient, DEFAULT_FAKE_RESPONDERS } from "@/modules/ai/fake";
 import type { AiCallInput } from "@/modules/ai/client";
 
 const ids = ["a", "b", "c", "d"];
@@ -89,6 +89,24 @@ describe("reconcileTopicMap", () => {
     expect(result.topics).toEqual([{ name: "Insulin therapy", slideIds: ["a", "b"] }]);
   });
 
+  it("takes an unreadable slide out of a topic and reports it as unassigned", () => {
+    const result = reconcileTopicMap(
+      {
+        topics: [
+          { name: "Insulin", slide_ids: ["a", "d"] },
+          { name: "Only unreadable", slide_ids: ["d"] },
+        ],
+        unassigned: [],
+      },
+      ids,
+      ["a", "b", "c"],
+    );
+    expect(result.topics).toEqual([{ name: "Insulin", slideIds: ["a"] }]);
+    expect(result.unassigned).toContainEqual({ slideId: "d", reason: "unreadable" });
+    expect(result.unassigned.filter((u) => u.slideId === "d")).toHaveLength(1);
+    expect(result.droppedIds).toEqual([]);
+  });
+
   it("does not list an assigned slide as unassigned", () => {
     const result = reconcileTopicMap(
       {
@@ -131,31 +149,59 @@ describe("slideExcerpt", () => {
 });
 
 describe("buildTopicMap", () => {
-  it("sends slide ids and existing topic names, and returns the model's map", async () => {
+  const slides = [
+    { id: "uuid-1", label: "Slide 3", title: "Pumps", text: "Closed loop", legibility: "clear" as const },
+    { id: "uuid-2", label: "Page 2, photo 1", title: null, text: "", legibility: "unreadable" as const },
+  ];
+
+  it("sends short aliases and existing topic names, never slide ids", async () => {
     let seen: AiCallInput<unknown> | undefined;
     const ai = createFakeAiClient({
       topicMap: (input) => {
         seen = input;
-        return { topics: [{ name: "Insulin", slide_ids: ["s1"] }], unassigned: [] };
+        return { topics: [{ name: "Insulin", slide_ids: ["S1"] }], unassigned: [] };
       },
     });
-    const map = await buildTopicMap(
-      [{ id: "s1", label: "Slide 3", title: "Pumps", text: "Closed loop", legibility: "clear" }],
-      ["Hypoglycaemia"],
-      ai,
-      "doc-1",
-    );
-    expect(map.topics[0].name).toBe("Insulin");
+    await buildTopicMap(slides, ["Hypoglycaemia"], ai, "doc-1");
     expect(seen).toMatchObject({
       task: "topicMap",
-      promptVersion: "topic-map@1",
+      promptVersion: "topic-map@2",
       system: TOPIC_MAP_PROMPT.system,
       documentId: "doc-1",
     });
     const text = JSON.stringify(seen!.content);
-    expect(text).toContain("s1");
+    expect(text).toContain("id: S1");
+    expect(text).toContain("id: S2");
     expect(text).toContain("Slide 3");
     expect(text).toContain("Hypoglycaemia");
+    expect(text).not.toContain("uuid-");
+    expect(seen!.meta).toEqual({ slideAliases: "S1,S2", readableSlideAliases: "S1" });
+  });
+
+  it("maps aliases back to slide ids and leaves an invented alias for reconcile to drop", async () => {
+    const ai = createFakeAiClient({
+      topicMap: () => ({
+        topics: [{ name: "Insulin", slide_ids: ["S1", " S2 ", "S99"] }],
+        unassigned: [{ slide_id: "S77", reason: "odd" }],
+      }),
+    });
+    const map = await buildTopicMap(slides, [], ai, "doc-1");
+    expect(map).toEqual({
+      topics: [{ name: "Insulin", slide_ids: ["uuid-1", "uuid-2", "S99"] }],
+      unassigned: [{ slide_id: "S77", reason: "odd" }],
+    });
+    const result = reconcileTopicMap(map, ["uuid-1", "uuid-2"], ["uuid-1"]);
+    expect(result.topics).toEqual([{ name: "Insulin", slideIds: ["uuid-1"] }]);
+    expect(result.droppedIds.sort()).toEqual(["S77", "S99"]);
+  });
+
+  it("the default fake answers with the aliases it was given", async () => {
+    const ai = createFakeAiClient(DEFAULT_FAKE_RESPONDERS);
+    const map = await buildTopicMap(slides, [], ai, "doc-1");
+    expect(map).toEqual({
+      topics: [{ name: "Fixture topic", slide_ids: ["uuid-1"] }],
+      unassigned: [{ slide_id: "uuid-2", reason: "unreadable" }],
+    });
   });
 });
 
@@ -168,5 +214,6 @@ describe("TOPIC_MAP_PROMPT", () => {
     expect(s).toMatch(/short clinical heading/i);
     expect(s).toMatch(/unreadable/i);
     expect(s).toMatch(/unassigned/i);
+    expect(s).toMatch(/S12/);
   });
 });

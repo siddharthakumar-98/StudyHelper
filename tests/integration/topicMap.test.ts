@@ -128,7 +128,7 @@ describe("topic_map stage", () => {
       topicMap: (input: AiCallInput<unknown>) => {
         existingSeen = JSON.stringify(input.content);
         return {
-          topics: [{ name: "fixture topic", slide_ids: second.slideIds }],
+          topics: [{ name: "fixture topic", slide_ids: ["S1"] }],
           unassigned: [],
         };
       },
@@ -155,7 +155,7 @@ describe("topic_map stage", () => {
     await runTopicMap(b.documentId);
 
     const ai = createFakeAiClient({
-      topicMap: () => ({ topics: [{ name: "Other topic", slide_ids: a.slideIds }], unassigned: [] }),
+      topicMap: () => ({ topics: [{ name: "Other topic", slide_ids: ["S1"] }], unassigned: [] }),
     });
     await runTopicMap(a.documentId, { ai, db });
 
@@ -169,14 +169,26 @@ describe("topic_map stage", () => {
     expect(byName).toEqual({ [a.slideIds[0]]: "Other topic", [b.slideIds[0]]: "Fixture topic" });
   });
 
-  it("a model answer with unknown ids never reaches the database", async () => {
+  it("a model answer with unknown aliases or ids never reaches the database", async () => {
     await resetDb();
     const { documentId, slideIds } = await documentWithSlides(["clear", "clear"]);
     const ai = createFakeAiClient({
       topicMap: () => ({
-        topics: [{ name: "Insulin", slide_ids: [slideIds[0], "00000000-0000-0000-0000-000000000000"] }],
+        topics: [{ name: "Insulin", slide_ids: ["S1", "S9", "00000000-0000-0000-0000-000000000000"] }],
         unassigned: [],
       }),
+    });
+    const { snapshot } = await runTopicMap(documentId, { ai, db });
+    expect(snapshot).toMatchObject({ status: "done", error: null });
+    const { data: links } = await service.from("slide_topics").select("slide_id").in("slide_id", slideIds);
+    expect(links).toEqual([{ slide_id: slideIds[0] }]);
+  });
+
+  it("never links an unreadable slide the model put in a topic", async () => {
+    await resetDb();
+    const { documentId, slideIds } = await documentWithSlides(["clear", "unreadable"]);
+    const ai = createFakeAiClient({
+      topicMap: () => ({ topics: [{ name: "Insulin", slide_ids: ["S1", "S2"] }], unassigned: [] }),
     });
     const { snapshot } = await runTopicMap(documentId, { ai, db });
     expect(snapshot).toMatchObject({ status: "done", error: null });

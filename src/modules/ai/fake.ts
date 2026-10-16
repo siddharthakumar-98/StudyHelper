@@ -30,10 +30,10 @@ const extractResponder: FakeResponder = (input) => {
 const idList = (value: string | number | undefined) =>
   String(value ?? "").split(",").filter(Boolean);
 
-/** Every readable slide (meta.readableSlideIds) goes into one topic; the rest are unassigned. */
+/** Every readable slide alias (meta.readableSlideAliases) goes into one topic; the rest are unassigned. */
 const topicMapResponder: FakeResponder = (input) => {
-  const readable = idList(input.meta?.readableSlideIds);
-  const unreadable = idList(input.meta?.slideIds).filter((id) => !readable.includes(id));
+  const readable = idList(input.meta?.readableSlideAliases);
+  const unreadable = idList(input.meta?.slideAliases).filter((id) => !readable.includes(id));
   return {
     topics: readable.length > 0 ? [{ name: "Fixture topic", slide_ids: readable }] : [],
     unassigned: unreadable.map((slide_id) => ({ slide_id, reason: "unreadable" })),
