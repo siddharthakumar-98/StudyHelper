@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { slideLabel } from "@/modules/ingestion/slideLabel";
+import { slideHeading, slideLabel } from "@/modules/ingestion/slideLabel";
 
 describe("slideLabel", () => {
   it("uses the printed slide number", () => {
@@ -31,6 +31,20 @@ describe("slideLabel", () => {
   it("treats a blank printed number as missing", () => {
     expect(slideLabel({ printed_slide_no: "  ", page_no: 3, position_on_page: 2 })).toBe(
       "Page 3, photo 2",
+    );
+  });
+});
+
+describe("slideHeading", () => {
+  it("adds page context to a printed number so duplicates stay distinct", () => {
+    expect(slideHeading({ printed_slide_no: "42", page_no: 14, position_on_page: 2 })).toBe(
+      "Slide 42 · page 14",
+    );
+  });
+
+  it("does not repeat the page for an unnumbered photo", () => {
+    expect(slideHeading({ printed_slide_no: null, page_no: 2, position_on_page: 1 })).toBe(
+      "Page 2, photo 1",
     );
   });
 });
