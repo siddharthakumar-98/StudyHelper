@@ -1,17 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { SlideCard } from "./SlideCard";
 import { needsChecking, type SlideView } from "./slideReview";
 
 /** Slides grouped by page, with a filter for the ones that need a second look. */
 export function SlideList({ slides, isAdmin }: { slides: SlideView[]; isAdmin: boolean }) {
   const [onlyChecking, setOnlyChecking] = useState(false);
+  // Lets tests (and nothing else) know the filter is interactive: a click before
+  // hydration is lost, and webkit shows the server HTML long before it hydrates.
+  const hydrated = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
   const shown = onlyChecking ? slides.filter(needsChecking) : slides;
   const pageNos = [...new Set(shown.map((s) => s.pageNo))];
 
   return (
-    <div>
+    <div data-hydrated={hydrated ? "true" : "false"}>
       <label className="flex min-h-12 items-center gap-3 text-lg">
         <input
           type="checkbox"

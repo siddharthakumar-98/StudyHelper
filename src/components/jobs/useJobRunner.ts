@@ -81,9 +81,13 @@ export function useJobRunner(jobId: string | null): {
       if (!cancelled) setRunning(false);
     }
 
-    void loop();
+    // Start on the next tick: React StrictMode (dev) mounts, unmounts and re-mounts an
+    // effect straight away, and a POST that is aborted right after it was sent still
+    // runs on the server (and shows up there as ECONNRESET).
+    const start = setTimeout(() => void loop(), 0);
     return () => {
       cancelled = true;
+      clearTimeout(start);
       controller.abort();
     };
     // `attempt` changes only through retry(); reading its flag here is intentional.

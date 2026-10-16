@@ -4,7 +4,7 @@ import { createJob } from "@/modules/jobs/engine";
 import { SupabaseJobStore } from "@/modules/jobs/store";
 import {
   MAX_SLIDE_TEXT_LENGTH,
-  latestUnfinishedJobId,
+  latestJobOf,
   pageViewUrlFor,
   updateSlideTextRecord,
 } from "@/modules/ingestion/slideService";
@@ -93,17 +93,20 @@ describe("slide review services", () => {
     );
   });
 
-  it("finds the most recent job that is not done", async () => {
+  it("finds the newest job of a handout, whatever its status", async () => {
     const { documentId } = await documentWithOneSlide();
-    expect(await latestUnfinishedJobId(db, documentId)).toBeNull();
+    expect(await latestJobOf(db, documentId)).toBeNull();
     const store = new SupabaseJobStore(db);
     const first = await createJob(store, "split", documentId, {});
     await db.from("jobs").update({ status: "done" }).eq("id", first);
-    expect(await latestUnfinishedJobId(db, documentId)).toBeNull();
-    const second = await createJob(store, "extract", documentId, {});
+    expect(await latestJobOf(db, documentId)).toEqual({ id: first, kind: "split", status: "done" });
+    await createJob(store, "extract", documentId, {});
     const third = await createJob(store, "topic_map", documentId, {});
     await db.from("jobs").update({ status: "failed" }).eq("id", third);
-    expect(await latestUnfinishedJobId(db, documentId)).toBe(third);
-    expect(second).not.toBe(third);
+    expect(await latestJobOf(db, documentId)).toEqual({
+      id: third,
+      kind: "topic_map",
+      status: "failed",
+    });
   });
 });

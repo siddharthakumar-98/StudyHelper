@@ -8,7 +8,12 @@ import {
   type UploadInput,
   type UploadTicket,
 } from "./uploadService";
-import { latestUnfinishedJobId, pageViewUrlFor, updateSlideTextRecord } from "./slideService";
+import {
+  latestJobOf,
+  pageViewUrlFor,
+  updateSlideTextRecord,
+  type LatestJob,
+} from "./slideService";
 
 export async function createUpload(
   input: UploadInput,
@@ -32,7 +37,7 @@ export async function getPageViewUrl(pageId: string): Promise<string> {
   return pageViewUrlFor(createServiceSupabase(), pageId);
 }
 
-export async function getLatestJobId(documentId: string): Promise<string | null> {
+export async function getLatestJob(documentId: string): Promise<LatestJob | null> {
   await requireUser();
-  return latestUnfinishedJobId(createServiceSupabase(), documentId);
+  return latestJobOf(createServiceSupabase(), documentId);
 }

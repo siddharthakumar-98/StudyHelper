@@ -46,18 +46,23 @@ export async function pageViewUrlFor(
   return data.signedUrl;
 }
 
-/** The most recent job of a handout that is not done (pending, running or failed). */
-export async function latestUnfinishedJobId(
+export type LatestJob = {
+  id: string;
+  kind: string;
+  status: "pending" | "running" | "done" | "failed";
+};
+
+/** The newest job of a handout, whatever its status (null when it has none). */
+export async function latestJobOf(
   db: SupabaseClient<Database>,
   documentId: string,
-): Promise<string | null> {
+): Promise<LatestJob | null> {
   const { data, error } = await db
     .from("jobs")
-    .select("id")
+    .select("id, kind, status")
     .eq("document_id", documentId)
-    .neq("status", "done")
     .order("created_at", { ascending: false })
     .limit(1);
   if (error) throw new Error(`Could not look up the job: ${error.message}`);
-  return data[0]?.id ?? null;
+  return data[0] ?? null;
 }

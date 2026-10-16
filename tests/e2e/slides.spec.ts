@@ -44,7 +44,6 @@ test.describe("slide review", () => {
     await loginAs(page, "admin");
     const docPath = await uploadTwoPageHandout(page, "Slide review handout");
 
-    await expect(page.getByText("Reading slides").first()).toBeVisible({ timeout: 60_000 });
     await expect(card(page, 1)).toBeVisible({ timeout: 90_000 });
     await expect(card(page, 2)).toBeVisible();
     await expect(page.getByRole("article")).toHaveCount(2);
@@ -68,12 +67,8 @@ test.describe("slide review", () => {
     await expect(card(page, 2).getByText("Corrected", { exact: true })).toHaveCount(0);
 
     // The fake pipeline finishes: questions are written and checked, the handout is ready.
-    // Reload until then: a page rendered just as the last job finishes has no runner
-    // left to refresh it.
-    await expect(async () => {
-      await page.reload();
-      await expect(page.getByText(/· Ready$/)).toBeVisible({ timeout: 2_000 });
-    }).toPass({ timeout: 90_000 });
+    // No reload: the page converges by itself when the last stage finishes.
+    await expect(page.getByText(/· Ready$/)).toBeVisible({ timeout: 90_000 });
 
     // "View photo" opens a signed URL that works.
     // The browser's own request for the opened photo must succeed. (Which viewer shows a
@@ -94,6 +89,28 @@ test.describe("slide review", () => {
     await expect(studentPage.getByRole("textbox")).toHaveCount(0);
     await expect(studentPage.getByRole("button", { name: "Save correction" })).toHaveCount(0);
     await expect(card(studentPage, 2).getByRole("button", { name: "View photo" })).toBeVisible();
+
+    // A failed pipeline reads plainly to a student, and the page follows later progress
+    // by itself (it re-reads every 15 s) without a reload.
+    const { createClient } = await import("@supabase/supabase-js");
+    const service = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    );
+    const docId = docPath.split("/").pop()!;
+    await service.from("documents").update({ status: "processing" }).eq("id", docId);
+    const { error: jobError } = await service
+      .from("jobs")
+      .insert({ kind: "generate", document_id: docId, status: "failed", error: "boom" });
+    expect(jobError).toBeNull();
+    await studentPage.reload();
+    const attention = studentPage.getByText(
+      "This handout needs attention before its slides are ready. Please check back later.",
+    );
+    await expect(attention).toBeVisible();
+    await service.from("documents").update({ status: "ready" }).eq("id", docId);
+    await expect(studentPage.getByText(/· Ready$/)).toBeVisible({ timeout: 30_000 });
+    await expect(attention).toHaveCount(0);
     await studentContext.close();
   });
 
@@ -128,6 +145,8 @@ test.describe("slide review", () => {
     page = await reopen(page, docPath);
     await expect(card(page, 2).getByText("Partly readable", { exact: true })).toBeVisible();
     await expect(card(page, 2).locator("mark")).toHaveText("glipizide");
+    // The list must be hydrated, or webkit loses the click.
+    await page.locator('div[data-hydrated="true"]', { has: page.getByRole("checkbox") }).waitFor();
     await page.getByRole("checkbox", { name: "Show only slides that need checking" }).check();
     await expect(page.getByRole("article")).toHaveCount(1);
     await expect(card(page, 2)).toBeVisible();

@@ -1,11 +1,18 @@
 import { notFound } from "next/navigation";
+import { AutoRefresh } from "@/components/materials/AutoRefresh";
 import { DocumentProgress } from "@/components/materials/DocumentProgress";
-import { formatClassDate, pagesLabel, statusLabel } from "@/components/materials/status";
+import {
+  STUDENT_ATTENTION_COPY,
+  STUDENT_PREPARING_COPY,
+  documentStatusView,
+  formatClassDate,
+  pagesLabel,
+} from "@/components/materials/status";
 import { requireUser } from "@/lib/auth";
 import { createServerSupabase } from "@/lib/supabase/server";
 import { SlideList } from "@/components/materials/SlideList";
 import { parseTables, type SlideView } from "@/components/materials/slideReview";
-import { getLatestJobId } from "@/modules/ingestion/upload";
+import { getLatestJob } from "@/modules/ingestion/upload";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -25,6 +32,11 @@ export default async function DocumentPage({
   const { docId } = await params;
   const { job } = await searchParams;
   if (!UUID.test(docId)) notFound();
+
+  // Read the newest job BEFORE the document. A step that finishes between the two
+  // reads then makes the document newer than the job, never older, so the page cannot
+  // show an earlier stage than the one the database is already in.
+  const latestJob = await getLatestJob(docId);
 
   const supabase = await createServerSupabase();
   const { data: doc, error } = await supabase
@@ -70,26 +82,31 @@ export default async function DocumentPage({
   );
 
   const isAdmin = user.role === "admin";
-  const latestJobId = await getLatestJobId(docId);
-  const progressJobId = isAdmin ? (job && UUID.test(job) ? job : latestJobId) : null;
+  const view = documentStatusView({
+    docStatus: doc.status,
+    latestJob,
+    isAdmin,
+    requestedJobId: job && UUID.test(job) ? job : null,
+  });
 
   return (
     <>
       <h1 className="text-3xl font-bold">{doc.title}</h1>
       <p className="mt-2 text-lg text-zinc-800">
         {formatClassDate(doc.class_date)} · {pagesLabel(doc.page_count)} ·{" "}
-        {statusLabel(doc.status)}
+        {view.label}
       </p>
-      {progressJobId ? (
+      {view.runnerJobId ? (
         <div className="mt-6 max-w-xl">
-          <DocumentProgress jobId={progressJobId} />
+          <DocumentProgress jobId={view.runnerJobId} />
         </div>
       ) : null}
-      {!isAdmin && latestJobId ? (
+      {view.studentNotice ? (
         <p role="status" className="mt-6 max-w-xl rounded-lg border-2 border-zinc-300 p-4 text-lg">
-          This handout is still being prepared. Slides appear below as they are read.
+          {view.studentNotice === "attention" ? STUDENT_ATTENTION_COPY : STUDENT_PREPARING_COPY}
         </p>
       ) : null}
+      {view.poll ? <AutoRefresh everyMs={isAdmin ? 5_000 : 15_000} /> : null}
       {/* Task 14 adds the "Coverage report" section here. */}
       {pages.length > 0 ? (
         <ul aria-label="Pages" className="mt-6 grid max-w-xl gap-2">
