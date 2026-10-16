@@ -10,7 +10,8 @@ import { createTestUser, resetDb, serviceClient, signedInClient } from "./helper
 // requireUser/requireAdmin and the real row level security both apply.
 const { session } = vi.hoisted(() => ({ session: { client: null as unknown } }));
 vi.mock("server-only", () => ({}));
-vi.mock("next/navigation", () => ({
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
   redirect: (path: string): never => {
     throw new Error(`NEXT_REDIRECT:${path}`);
   },
@@ -18,10 +19,9 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/supabase/server", () => ({ createServerSupabase: async () => session.client }));
 process.env.AI_FAKE = "1";
 
-const { ForbiddenError } = await import("@/lib/auth");
 const actions = await import("@/modules/bank/actions");
 const { getQuestionDetail, listQuestions } = await import("@/modules/bank/repository");
-const { regenerateRecord, BankError } = await import("@/modules/bank/bankService");
+const { regenerateRecord } = await import("@/modules/bank/bankService");
 
 const service = serviceClient();
 const db = service as SupabaseClient<Database>;
@@ -137,6 +137,13 @@ async function seedQuestion(opts: SeedOptions = {}): Promise<string> {
   return q!.id as string;
 }
 
+/** What a failed action returns: { ok: false, error, issues? }. */
+const failure = (message: RegExp | string, extra: Record<string, unknown> = {}) => ({
+  ok: false,
+  error: typeof message === "string" ? message : expect.stringMatching(message),
+  ...extra,
+});
+
 async function statusOf(id: string) {
   const { data } = await service.from("questions").select("status, current_version").eq("id", id).single();
   return data!;
@@ -173,29 +180,38 @@ beforeEach(async () => {
 describe("approve and reject", () => {
   it("approveQuestion moves needs_review to active", async () => {
     const id = await seedQuestion({ status: "needs_review" });
-    await actions.approveQuestion(id);
+    expect(await actions.approveQuestion(id)).toEqual({ ok: true });
     expect((await statusOf(id)).status).toBe("active");
   });
 
-  it("a student calling approveQuestion is forbidden and nothing changes", async () => {
+  it("a student calling approveQuestion is refused (Forbidden) and nothing changes", async () => {
     const id = await seedQuestion({ status: "needs_review" });
     asStudent();
-    await expect(actions.approveQuestion(id)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(await actions.approveQuestion(id)).toEqual({ ok: false, error: "Admin access required" });
     expect((await statusOf(id)).status).toBe("needs_review");
   });
 
   it("every admin action refuses a student", async () => {
     const id = await seedQuestion({ status: "active" });
     asStudent();
-    await expect(actions.rejectQuestion(id, "no")).rejects.toBeInstanceOf(ForbiddenError);
-    await expect(actions.editQuestion(id, MCQ_EDIT)).rejects.toBeInstanceOf(ForbiddenError);
-    await expect(actions.regenerateQuestion(id)).rejects.toBeInstanceOf(ForbiddenError);
+    const forbidden = { ok: false, error: "Admin access required" };
+    expect(await actions.rejectQuestion(id, "no")).toEqual(forbidden);
+    expect(await actions.editQuestion(id, MCQ_EDIT, 1)).toEqual(forbidden);
+    expect(await actions.regenerateQuestion(id, 1)).toEqual(forbidden);
     expect(await statusOf(id)).toEqual({ status: "active", current_version: 1 });
+  });
+
+  it("a visitor who is not signed in is redirected, not given a result", async () => {
+    const { anonClient } = await import("./helpers");
+    const id = await seedQuestion({ status: "needs_review" });
+    session.client = anonClient();
+    await expect(actions.approveQuestion(id)).rejects.toThrow("NEXT_REDIRECT:/login");
+    await expect(actions.flagQuestion(id, null)).rejects.toThrow("NEXT_REDIRECT:/login");
   });
 
   it("rejectQuestion retires the question and appends 'Rejected: <reason>'", async () => {
     const id = await seedQuestion({ status: "needs_review", reviewNotes: ["Verifier: first note"] });
-    await actions.rejectQuestion(id, "  The slide does not say this  ");
+    expect(await actions.rejectQuestion(id, "  The slide does not say this  ")).toEqual({ ok: true });
     expect((await statusOf(id)).status).toBe("retired");
     expect((await version(id, 1))!.review_notes).toEqual([
       "Verifier: first note",
@@ -203,27 +219,60 @@ describe("approve and reject", () => {
     ]);
   });
 
-  it("rejectQuestion needs a reason", async () => {
+  it("rejectQuestion needs a reason of at most 1000 characters", async () => {
     const id = await seedQuestion({ status: "needs_review" });
-    await expect(actions.rejectQuestion(id, "   ")).rejects.toThrow(/reason/i);
+    expect(await actions.rejectQuestion(id, "   ")).toEqual(failure(/reason/i));
+    expect(await actions.rejectQuestion(id, "x".repeat(1001))).toEqual(failure(/under 1000 characters/));
     expect((await statusOf(id)).status).toBe("needs_review");
+    expect(await actions.rejectQuestion(id, "x".repeat(1000))).toEqual({ ok: true });
   });
 
-  it("an illegal move is a clear error, not a status change", async () => {
+  it("an illegal move is a clear result, not a status change", async () => {
     const retired = await seedQuestion({ status: "retired" });
-    await expect(actions.approveQuestion(retired)).rejects.toThrow(/retired, so it can't be approved/);
+    expect(await actions.approveQuestion(retired)).toEqual(failure(/retired, so it can't be approved/));
     const draft = await seedQuestion({ status: "draft" });
-    await expect(actions.approveQuestion(draft)).rejects.toBeInstanceOf(BankError);
+    expect(await actions.editQuestion(draft, MCQ_EDIT, 1)).toEqual(failure(/still being checked, so it can't be edited/));
+    expect(await actions.regenerateQuestion(draft, 1)).toEqual(failure(/still being checked/));
     expect((await statusOf(retired)).status).toBe("retired");
-    await expect(actions.approveQuestion("not-a-uuid")).rejects.toThrow(/not found/i);
+    expect(await actions.approveQuestion("not-a-uuid")).toEqual(failure(/not found/i));
+  });
+
+  it("an admin can approve or reject a draft stranded by a killed regenerate", async () => {
+    const stranded = async () => {
+      const id = await seedQuestion({ status: "active" });
+      // What a regenerate that died after saving leaves behind: version 2, a draft.
+      const { error } = await db.rpc("create_question_version", {
+        p_question_id: id,
+        p_version: { stem: "Replacement stem?", options: [], source_refs: [], basis_quote: "q", review_notes: [] },
+        p_key: { model_answer: "m" },
+        p_status: "draft",
+        p_expected_version: 1,
+      });
+      expect(error).toBeNull();
+      expect(await statusOf(id)).toEqual({ status: "draft", current_version: 2 });
+      return id;
+    };
+
+    const toApprove = await stranded();
+    expect(await actions.approveQuestion(toApprove)).toEqual({ ok: true });
+    expect(await statusOf(toApprove)).toEqual({ status: "active", current_version: 2 });
+
+    const toReject = await stranded();
+    expect(await actions.rejectQuestion(toReject, "Check never finished")).toEqual({ ok: true });
+    expect((await statusOf(toReject)).status).toBe("retired");
+    expect((await version(toReject, 2))!.review_notes).toEqual(["Rejected: Check never finished"]);
+
+    asStudent();
+    const draft = await stranded();
+    expect(await actions.approveQuestion(draft)).toEqual({ ok: false, error: "Admin access required" });
   });
 });
 
 describe("editQuestion versioning", () => {
   it("changing the correct option makes version 2 and keeps version 1 with its original key", async () => {
     const id = await seedQuestion({ status: "active" });
-    const result = await actions.editQuestion(id, { ...MCQ_EDIT, correctOptionId: "b", explanation: "Now b." });
-    expect(result).toEqual({ version: 2 });
+    const result = await actions.editQuestion(id, { ...MCQ_EDIT, correctOptionId: "b", explanation: "Now b." }, 1);
+    expect(result).toEqual({ ok: true, version: 2 });
     expect(await statusOf(id)).toEqual({ status: "active", current_version: 2 });
 
     const v1 = await version(id, 1);
@@ -239,11 +288,11 @@ describe("editQuestion versioning", () => {
 
   it("an edit of a needs_review question makes it active", async () => {
     const id = await seedQuestion({ status: "needs_review", reviewNotes: ["Verifier: the answer is unclear"] });
-    await actions.editQuestion(id, MCQ_EDIT);
+    expect(await actions.editQuestion(id, MCQ_EDIT, 1)).toEqual({ ok: true, version: 2 });
     expect((await statusOf(id)).status).toBe("active");
   });
 
-  it("rejects an SAQ rubric whose weights add up to 4.0 and writes nothing", async () => {
+  it("rejects an SAQ rubric whose weights add up to 4.0, listing the issue, and writes nothing", async () => {
     const id = await seedQuestion({ type: "saq", status: "active" });
     const rubric = {
       criteria: [
@@ -253,25 +302,65 @@ describe("editQuestion versioning", () => {
       ],
       critical_errors: [],
     };
-    await expect(actions.editQuestion(id, { ...MCQ_EDIT, rubric })).rejects.toThrow(
-      "Rubric weights must add up to 5.0",
-    );
+    expect(await actions.editQuestion(id, { ...MCQ_EDIT, rubric }, 1)).toEqual({
+      ok: false,
+      error: "Rubric weights must add up to 5.0",
+      issues: ["Rubric weights must add up to 5.0"],
+    });
     expect(await statusOf(id)).toEqual({ status: "active", current_version: 1 });
     expect(await version(id, 2)).toBeNull();
   });
 
-  it("rejects an MCQ with a correct option that is not an option, and a blank stem", async () => {
+  it("rejects an MCQ with too few options and a blank stem, and writes nothing", async () => {
     const id = await seedQuestion({ status: "active" });
-    await expect(
-      actions.editQuestion(id, { ...MCQ_EDIT, options: [{ id: "a", text: "x" }, { id: "b", text: "y" }] }),
-    ).rejects.toThrow(/options a, b, c, d/);
-    await expect(actions.editQuestion(id, { ...MCQ_EDIT, stem: "   " })).rejects.toThrow(/question text/i);
+    expect(
+      await actions.editQuestion(id, { ...MCQ_EDIT, options: [{ id: "a", text: "x" }, { id: "b", text: "y" }] }, 1),
+    ).toMatchObject(failure(/options a, b, c, d/, { issues: [expect.stringMatching(/options a, b, c, d/)] }));
+    expect(await actions.editQuestion(id, { ...MCQ_EDIT, stem: "   " }, 1)).toEqual(failure(/question text/i));
     expect(await version(id, 2)).toBeNull();
   });
 
   it("cannot edit a retired question", async () => {
     const id = await seedQuestion({ status: "retired" });
-    await expect(actions.editQuestion(id, MCQ_EDIT)).rejects.toThrow(/retired/);
+    expect(await actions.editQuestion(id, MCQ_EDIT, 1)).toEqual(failure(/retired/));
+  });
+
+  it("refuses an edit based on an older version and writes nothing", async () => {
+    const id = await seedQuestion({ status: "active" });
+    expect(await actions.editQuestion(id, { ...MCQ_EDIT, correctOptionId: "b" }, 1)).toEqual({ ok: true, version: 2 });
+    // A second admin still looking at version 1.
+    expect(await actions.editQuestion(id, { ...MCQ_EDIT, stem: "Another stem?", correctOptionId: "c" }, 1)).toEqual(
+      failure(/changed since you opened it/),
+    );
+    expect(await statusOf(id)).toEqual({ status: "active", current_version: 2 });
+    expect(await version(id, 3)).toBeNull();
+    expect((await version(id, 2))!.answer_keys).toMatchObject({ correct_option_id: "b" });
+  });
+
+  it("two edits of the same version at once: exactly one is saved", async () => {
+    const id = await seedQuestion({ status: "active" });
+    const [first, second] = await Promise.all([
+      actions.editQuestion(id, { ...MCQ_EDIT, correctOptionId: "b" }, 1),
+      actions.editQuestion(id, { ...MCQ_EDIT, correctOptionId: "c" }, 1),
+    ]);
+    expect([first.ok, second.ok].sort()).toEqual([false, true]);
+    const refused = first.ok ? second : first;
+    expect(refused).toEqual(failure(/changed since you opened it/));
+    expect(await statusOf(id)).toEqual({ status: "active", current_version: 2 });
+    expect(await version(id, 3)).toBeNull();
+  });
+
+  it("the database itself refuses a stale expected version", async () => {
+    const id = await seedQuestion({ status: "active" });
+    const { error } = await db.rpc("create_question_version", {
+      p_question_id: id,
+      p_version: { stem: "S", source_refs: [], basis_quote: "q" },
+      p_key: {},
+      p_status: "active",
+      p_expected_version: 7,
+    });
+    expect(error?.message).toMatch(/Version changed: expected 7/);
+    expect(await version(id, 2)).toBeNull();
   });
 });
 
@@ -279,7 +368,7 @@ describe("flagQuestion", () => {
   it("a student's flag marks the question flagged and records the flag", async () => {
     const id = await seedQuestion({ status: "active", stem: "Which drug class lowers heart failure admissions?" });
     asStudent();
-    await actions.flagQuestion(id, "The answer looks wrong");
+    expect(await actions.flagQuestion(id, "The answer looks wrong")).toEqual({ ok: true });
     expect((await statusOf(id)).status).toBe("flagged");
     const { data: flags } = await service.from("question_flags").select("user_id, comment").eq("question_id", id);
     expect(flags).toEqual([{ user_id: student.id, comment: "The answer looks wrong" }]);
@@ -293,8 +382,8 @@ describe("flagQuestion", () => {
   it("a second flag adds a row and leaves the status; a null comment is allowed", async () => {
     const id = await seedQuestion({ status: "active" });
     asStudent();
-    await actions.flagQuestion(id, null);
-    await actions.flagQuestion(id, "Also unclear");
+    expect(await actions.flagQuestion(id, null)).toEqual({ ok: true });
+    expect(await actions.flagQuestion(id, "Also unclear")).toEqual({ ok: true });
     expect((await statusOf(id)).status).toBe("flagged");
     const { data: flags } = await service.from("question_flags").select("comment").eq("question_id", id);
     expect(flags).toHaveLength(2);
@@ -303,24 +392,24 @@ describe("flagQuestion", () => {
   it("a student cannot flag a question they cannot see", async () => {
     const id = await seedQuestion({ status: "needs_review" });
     asStudent();
-    await expect(actions.flagQuestion(id, "x")).rejects.toThrow(/not found/i);
+    expect(await actions.flagQuestion(id, "x")).toEqual(failure(/not found/i));
     const { data: flags } = await service.from("question_flags").select("id").eq("question_id", id);
     expect(flags).toEqual([]);
   });
 
   it("an admin can flag an active question", async () => {
     const id = await seedQuestion({ status: "active" });
-    await actions.flagQuestion(id, "Check this");
+    expect(await actions.flagQuestion(id, "Check this")).toEqual({ ok: true });
     expect((await statusOf(id)).status).toBe("flagged");
   });
 
   it("approving a flagged question resolves its flags", async () => {
     const id = await seedQuestion({ status: "active" });
     asStudent();
-    await actions.flagQuestion(id, "Unclear");
+    expect(await actions.flagQuestion(id, "Unclear")).toEqual({ ok: true });
     asAdmin();
     expect((await getQuestionDetail(id)).flags).toEqual([{ comment: "Unclear", createdAt: expect.any(String) }]);
-    await actions.approveQuestion(id);
+    expect(await actions.approveQuestion(id)).toEqual({ ok: true });
     expect((await statusOf(id)).status).toBe("active");
     expect((await getQuestionDetail(id)).flags).toEqual([]);
   });
@@ -343,7 +432,7 @@ describe("answer keys and review notes stay off the student path", () => {
       versionCount: 1,
       topicName: f.topicName,
       reviewNotes: [],
-      conflictNote: null,
+      conflictNote: "Slide 3 says 450/TDD",
       key: null,
     });
     expect(detail.options).toHaveLength(4);
@@ -352,35 +441,47 @@ describe("answer keys and review notes stay off the student path", () => {
     ]);
     const raw = await studentClient.from("answer_keys").select();
     expect(raw.data ?? []).toEqual([]);
+    expect(JSON.stringify(detail)).not.toContain("Verifier");
   });
 
-  it("a student cannot read review_notes from question_versions", async () => {
-    const id = await seedQuestion({ status: "active", reviewNotes: ["Verifier: the answer is a"] });
-    const denied = await studentClient.from("question_versions").select("review_notes").eq("question_id", id);
-    expect(denied.error).not.toBeNull();
-    expect(denied.data).toBeNull();
+  it("a student cannot read review_notes, basis_quote or conflict_note from question_versions", async () => {
+    const id = await seedQuestion({
+      status: "active",
+      reviewNotes: ["Verifier: the answer is a"],
+      conflictNote: "Slide 3 says 450/TDD",
+    });
+    for (const column of ["review_notes", "basis_quote", "conflict_note"]) {
+      const denied = await studentClient.from("question_versions").select(column).eq("question_id", id);
+      expect(denied.error, column).not.toBeNull();
+      expect(denied.data, column).toBeNull();
+    }
     const star = await studentClient.from("question_versions").select("*").eq("question_id", id);
     expect(star.error).not.toBeNull();
     const viaQuestions = await studentClient.from("questions").select("id, question_versions(review_notes)");
     expect(viaQuestions.error).not.toBeNull();
+    const viaQuestionsQuote = await studentClient.from("questions").select("id, question_versions(basis_quote)");
+    expect(viaQuestionsQuote.error).not.toBeNull();
+    // An admin's own client is held to the same grants: those columns come from the server only.
+    const adminDenied = await adminClient.from("question_versions").select("review_notes").eq("question_id", id);
+    expect(adminDenied.error).not.toBeNull();
   });
 
-  it("a student can still read the visible version through explicit columns", async () => {
+  it("a student can still read the visible version through the remaining columns", async () => {
     const id = await seedQuestion({ status: "active" });
     const hidden = await seedQuestion({ status: "needs_review" });
     const { data, error } = await studentClient
       .from("question_versions")
-      .select("question_id, version, stem, options, source_refs, basis_quote, conflict_note, created_at");
+      .select("question_id, version, stem, options, source_refs, created_at");
     expect(error).toBeNull();
     expect(data!.map((v) => v.question_id)).toEqual([id]);
     expect(data!.map((v) => v.question_id)).not.toContain(hidden);
   });
 
-  it("an anonymous client reads nothing from question_versions", async () => {
+  it("an anonymous client cannot read question_versions", async () => {
     const { anonClient } = await import("./helpers");
     await seedQuestion({ status: "active" });
-    const { data, error } = await anonClient().from("question_versions").select("stem");
-    expect(error !== null || (data ?? []).length === 0).toBe(true);
+    const { error } = await anonClient().from("question_versions").select("stem");
+    expect(error).not.toBeNull();
   });
 
   it("an admin's detail has the key, the review notes, the conflict note and the version count", async () => {
@@ -389,7 +490,7 @@ describe("answer keys and review notes stay off the student path", () => {
       reviewNotes: ["Verifier: the correct answer is a"],
       conflictNote: "Slide 3 says 450/TDD",
     });
-    await actions.editQuestion(id, MCQ_EDIT);
+    expect(await actions.editQuestion(id, MCQ_EDIT, 1)).toEqual({ ok: true, version: 2 });
     const detail = await getQuestionDetail(id);
     expect(detail).toMatchObject({
       version: 2,
@@ -467,7 +568,7 @@ describe("listQuestions", () => {
 
   it("lists the current version's stem after an edit", async () => {
     const id = await seedQuestion({ status: "active" });
-    await actions.editQuestion(id, MCQ_EDIT);
+    await actions.editQuestion(id, MCQ_EDIT, 1);
     const [item] = await listQuestions({ status: "active" });
     expect(item).toMatchObject({ id, stem: MCQ_EDIT.stem, difficulty: "medium" });
   });
@@ -476,8 +577,8 @@ describe("listQuestions", () => {
 describe("regenerateQuestion", () => {
   it("(fake AI) writes version 2 from the cited slide, checks it and ends active", async () => {
     const id = await seedQuestion({ status: "needs_review", stem: "Old stem about the C:I ratio?" });
-    const result = await actions.regenerateQuestion(id);
-    expect(result).toEqual({ status: "active" });
+    const result = await actions.regenerateQuestion(id, 1);
+    expect(result).toEqual({ ok: true, status: "active" });
     expect(await statusOf(id)).toEqual({ status: "active", current_version: 2 });
     const v1 = await version(id, 1);
     const v2 = await version(id, 2);
@@ -498,8 +599,8 @@ describe("regenerateQuestion", () => {
         return DEFAULT_FAKE_RESPONDERS.generate!(input);
       },
     });
-    expect(await regenerateRecord(db, ai, mcq)).toEqual({ status: "active" });
-    expect(await regenerateRecord(db, ai, saq)).toEqual({ status: "active" });
+    expect(await regenerateRecord(db, ai, mcq, 1)).toEqual({ status: "active" });
+    expect(await regenerateRecord(db, ai, saq, 1)).toEqual({ status: "active" });
     const text = (call: AiCallInput<unknown>) => (call.content[0] as { text: string }).text;
     expect(text(calls[0])).toContain("at most 1 MCQ and at most 0 SAQs");
     expect(text(calls[0])).toContain("- Current MCQ stem about the ratio?");
@@ -522,7 +623,7 @@ describe("regenerateQuestion", () => {
         return out;
       },
     };
-    expect(await regenerateRecord(db, createFakeAiClient(failing), id)).toEqual({ status: "needs_review" });
+    expect(await regenerateRecord(db, createFakeAiClient(failing), id, 1)).toEqual({ status: "needs_review" });
     expect((await version(id, 2))!.review_notes.join(" ")).toContain("fake verifier");
   });
 
@@ -541,7 +642,7 @@ describe("regenerateQuestion", () => {
         return DEFAULT_FAKE_RESPONDERS.verify!(input);
       },
     });
-    expect(await regenerateRecord(db, ai, id)).toEqual({ status: "needs_review" });
+    expect(await regenerateRecord(db, ai, id, 1)).toEqual({ status: "needs_review" });
     expect(verifyCalls).toHaveLength(0);
     expect((await version(id, 2))!.review_notes.join(" ")).toContain("Basis quote not found");
   });
@@ -554,7 +655,7 @@ describe("regenerateQuestion", () => {
         throw new Error("The AI service is busy");
       },
     });
-    expect(await regenerateRecord(db, ai, id)).toEqual({ status: "needs_review" });
+    expect(await regenerateRecord(db, ai, id, 1)).toEqual({ status: "needs_review" });
     expect((await version(id, 2))!.review_notes.join(" ")).toMatch(/did not finish.*busy/i);
   });
 
@@ -564,11 +665,11 @@ describe("regenerateQuestion", () => {
       ...DEFAULT_FAKE_RESPONDERS,
       generate: () => ({ mcqs: [], saqs: [], skipped_slides: [] }),
     });
-    await expect(regenerateRecord(db, none, id)).rejects.toThrow(/could not write a replacement/i);
+    await expect(regenerateRecord(db, none, id, 1)).rejects.toThrow(/could not write a replacement/i);
     expect(await statusOf(id)).toEqual({ status: "active", current_version: 1 });
 
     await service.from("source_slides").delete().eq("id", f.slideId);
-    await expect(regenerateRecord(db, createFakeAiClient(DEFAULT_FAKE_RESPONDERS), id)).rejects.toThrow(
+    await expect(regenerateRecord(db, createFakeAiClient(DEFAULT_FAKE_RESPONDERS), id, 1)).rejects.toThrow(
       /no longer available/i,
     );
     expect(await statusOf(id)).toEqual({ status: "active", current_version: 1 });
@@ -576,17 +677,42 @@ describe("regenerateQuestion", () => {
 
   it("refuses a retired question", async () => {
     const id = await seedQuestion({ status: "retired" });
-    await expect(actions.regenerateQuestion(id)).rejects.toThrow(/retired/);
+    expect(await actions.regenerateQuestion(id, 1)).toEqual(failure(/retired/));
+  });
+
+  it("refuses a stale version before any AI call, and a second regenerate of the same version", async () => {
+    const id = await seedQuestion({ status: "active" });
+    const generateCalls: unknown[] = [];
+    const ai = createFakeAiClient({
+      ...DEFAULT_FAKE_RESPONDERS,
+      generate: (input) => {
+        generateCalls.push(input);
+        return DEFAULT_FAKE_RESPONDERS.generate!(input);
+      },
+    });
+    expect(await regenerateRecord(db, ai, id, 1)).toEqual({ status: "active" });
+    await expect(regenerateRecord(db, ai, id, 1)).rejects.toThrow(/changed since you opened it/);
+    expect(generateCalls).toHaveLength(1);
+    expect(await statusOf(id)).toEqual({ status: "active", current_version: 2 });
+    expect(await actions.regenerateQuestion(id, 1)).toEqual(failure(/changed since you opened it/));
+    expect(await version(id, 3)).toBeNull();
+  });
+
+  it("through the action: a stale version is a failed result, nothing written", async () => {
+    const id = await seedQuestion({ status: "needs_review" });
+    expect(await actions.regenerateQuestion(id, 5)).toEqual(failure(/changed since you opened it/));
+    expect(await statusOf(id)).toEqual({ status: "needs_review", current_version: 1 });
   });
 });
 
 describe("create_question_version", () => {
-  const rpc = (id: string, status: Status) =>
+  const rpc = (id: string, status: Status, expected: number) =>
     db.rpc("create_question_version", {
       p_question_id: id,
       p_version: { stem: "S", options: null, source_refs: [], basis_quote: "q", conflict_note: null, review_notes: [] },
       p_key: { correct_option_id: null, explanation: null, model_answer: "m", key_concepts: null, rubric: null },
       p_status: status,
+      p_expected_version: expected,
     });
 
   it("is not callable by signed-in users", async () => {
@@ -596,20 +722,21 @@ describe("create_question_version", () => {
       p_version: {},
       p_key: {},
       p_status: "active",
+      p_expected_version: 1,
     });
     expect(error).not.toBeNull();
   });
 
   it("numbers versions after the highest, and refuses draft and retired questions", async () => {
     const id = await seedQuestion({ status: "active" });
-    expect((await rpc(id, "active")).data).toBe(2);
-    expect((await rpc(id, "draft")).data).toBe(3);
+    expect((await rpc(id, "active", 1)).data).toBe(2);
+    expect((await rpc(id, "draft", 2)).data).toBe(3);
     // Now a draft: no further version until it is checked.
-    expect((await rpc(id, "active")).error).not.toBeNull();
+    expect((await rpc(id, "active", 3)).error).not.toBeNull();
     expect((await statusOf(id)).current_version).toBe(3);
     const retired = await seedQuestion({ status: "retired" });
-    expect((await rpc(retired, "active")).error).not.toBeNull();
-    expect((await rpc(id, "flagged")).error).not.toBeNull();
+    expect((await rpc(retired, "active", 1)).error).not.toBeNull();
+    expect((await rpc(id, "flagged", 3)).error).not.toBeNull();
   });
 
   it("is atomic: a version that cannot be written leaves nothing behind", async () => {
@@ -619,6 +746,7 @@ describe("create_question_version", () => {
       p_version: { stem: "S", source_refs: [], basis_quote: "q", difficulty: "impossible" },
       p_key: {},
       p_status: "active",
+      p_expected_version: 1,
     });
     expect(bad.error).not.toBeNull();
     expect((await statusOf(id)).current_version).toBe(1);

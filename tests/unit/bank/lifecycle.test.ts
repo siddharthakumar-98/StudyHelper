@@ -20,6 +20,9 @@ const LEGAL: LegalRow[] = [
   { from: "draft", action: "verify_pass", actor: "system", to: "active", newVersion: false },
   { from: "draft", action: "verify_fail", actor: "system", to: "needs_review", newVersion: false },
   { from: "draft", action: "mark_duplicate", actor: "system", to: "retired", newVersion: false },
+  // R33: an admin can clear a draft stranded by a killed regenerate.
+  { from: "draft", action: "approve", actor: "admin", to: "active", newVersion: false },
+  { from: "draft", action: "reject", actor: "admin", to: "retired", newVersion: false },
   { from: "active", action: "flag", actor: "student", to: "flagged", newVersion: false },
   { from: "active", action: "flag", actor: "admin", to: "flagged", newVersion: false },
   { from: "active", action: "edit", actor: "admin", to: "active", newVersion: true },
@@ -64,7 +67,9 @@ describe("transition: legal rows", () => {
 describe("transition: illegal rows", () => {
   it.each([
     ["student approve on draft", "draft", "approve", "student"],
-    ["draft approve by admin", "draft", "approve", "admin"],
+    ["draft edit by admin", "draft", "edit", "admin"],
+    ["draft regenerate by admin", "draft", "regenerate", "admin"],
+    ["draft reject by student", "draft", "reject", "student"],
     ["retired edit by admin", "retired", "edit", "admin"],
     ["flagged flag by admin", "flagged", "flag", "admin"],
     ["flagged flag by student", "flagged", "flag", "student"],

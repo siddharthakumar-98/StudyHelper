@@ -25,6 +25,9 @@ const TRANSITIONS: Record<QuestionStatus, Partial<Record<LifecycleAction, TableE
     verify_pass: { actors: ["system"], to: "active", newVersion: false },
     verify_fail: { actors: ["system"], to: "needs_review", newVersion: false },
     mark_duplicate: { actors: ["system"], to: "retired", newVersion: false },
+    // A killed regenerate can strand a draft that no check will finish; an admin must be able to clear it.
+    approve: { actors: ["admin"], to: "active", newVersion: false },
+    reject: { actors: ["admin"], to: "retired", newVersion: false },
   },
   active: {
     flag: { actors: ["student", "admin"], to: "flagged", newVersion: false },

@@ -99,6 +99,11 @@ describe("buildEditedQuestion", () => {
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(BankError);
+      expect((error as InstanceType<typeof BankError>).issues).toEqual([
+        "Rubric needs 3–6 criteria",
+        "Rubric weights must add up to 5.0",
+        "Model answer is empty",
+      ]);
       expect((error as Error).message).toContain("Rubric needs 3–6 criteria");
       expect((error as Error).message).toContain("Model answer is empty");
     }

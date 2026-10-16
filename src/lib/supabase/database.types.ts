@@ -341,7 +341,7 @@ isOneToOne: false
         isSetofReturn: false
       } },
 "create_question_version":
-{ Args: { "p_key": Json,"p_question_id": string,"p_status": Database["public"]['Enums']["question_status"],"p_version": Json }; Returns: number
+{ Args: { "p_expected_version": number,"p_key": Json,"p_question_id": string,"p_status": Database["public"]['Enums']["question_status"],"p_version": Json }; Returns: number
                            },
 "delete_stale_draft_batches":
 { Args: { "p_keep_batch_keys": (string)[],"p_run_id": string }; Returns: number

@@ -13,6 +13,7 @@ import { generateForTopic, loadPagePhotos } from "@/modules/generation/generate"
 import { AUTO_CHECK_PREFIX, validateGenerated, validateStructure } from "@/modules/generation/validate";
 import { loadCitedSlides, processDraftQuestion, VERIFIER_PREFIX } from "@/modules/generation/verify";
 import { slideHeading } from "@/modules/ingestion/slideLabel";
+import { BankError } from "./errors";
 import {
   IllegalTransitionError,
   transition,
@@ -21,13 +22,16 @@ import {
   type QuestionStatus,
 } from "./lifecycle";
 
+export { BankError };
+
 // Everything the Question Bank reads and writes, with the database passed in.
 // Kept out of the "use server" file (its exports become callable from the
 // browser) and free of "server-only" so integration tests can drive it. Callers
-// decide who may call: reads for students take only the user's own (RLS) client;
-// the answer key, review notes and every write need the service client, which
-// only an action or loader that has already run requireAdmin()/requireUser()
-// may pass in.
+// decide who may call. Row level security (the user's own client) decides which
+// questions a user sees; the service client, which only an action or loader that
+// has already run requireAdmin()/requireUser() may pass in, adds the columns
+// signed-in users cannot read (conflict note, review notes, answer key) and does
+// every write.
 
 type Db = SupabaseClient<Database>;
 type Difficulty = "easy" | "medium" | "hard";
@@ -74,7 +78,6 @@ export type QuestionDetail = {
   stem: string;
   options: Option[] | null;
   sourceRefs: SourceRef[];
-  /** Admins only: it can say which slide holds the answer. */
   conflictNote: string | null;
   /** Admins only: verifier notes can name the correct answer. */
   reviewNotes: string[];
@@ -94,17 +97,12 @@ export type QuestionEdit = {
   rubric?: Rubric;
 };
 
-/** A problem the user can act on; its message is meant to be shown as it is. */
-export class BankError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "BankError";
-  }
-}
-
 const NOT_FOUND = "Question not found";
 const CHANGED = "This question was changed by someone else. Reload and try again.";
 const MAX_COMMENT_CHARS = 1000;
+const MAX_REASON_CHARS = 1000;
+const STALE =
+  "This question was changed since you opened it. Reload the page to see the latest version, then try again.";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ----------------------------------------------------------------- labels
@@ -161,16 +159,42 @@ const currentOf = <V extends { version: number }>(versions: V[], current: number
 
 // ------------------------------------------------------------------ reads
 
+/** conflict_note is not readable by signed-in users; ids per request keep the URL short. */
+const NOTE_CHUNK = 100;
+
 /**
- * Bank questions under the caller's own client, so row level security decides
- * what is visible (students: active and flagged only). Columns are always
- * named: review_notes is not readable by signed-in users. Oldest first.
+ * Conflict notes of the given (question, current version) pairs, read with the
+ * service client. Callers pass only ids that row level security already showed
+ * to the user, so this never widens what a student can reach.
  */
-export async function listQuestionsFor(db: Db, filter: BankFilter): Promise<BankListItem[]> {
+async function loadConflictNotes(
+  service: Db,
+  versions: { id: string; version: number }[],
+): Promise<Map<string, string | null>> {
+  const notes = new Map<string, string | null>();
+  for (let i = 0; i < versions.length; i += NOTE_CHUNK) {
+    const chunk = versions.slice(i, i + NOTE_CHUNK);
+    const { data, error } = await service
+      .from("question_versions")
+      .select("question_id, version, conflict_note")
+      .in("question_id", chunk.map((v) => v.id));
+    if (error) throw new Error(`Could not read the conflict notes: ${error.message}`);
+    for (const row of data) notes.set(`${row.question_id}:${row.version}`, row.conflict_note);
+  }
+  return notes;
+}
+
+/**
+ * Bank questions. Which ones the user may see is decided by `db`, the caller's
+ * own client under row level security (students: active and flagged only), and
+ * only through columns that client may read. Whether a question has a conflict
+ * note is then read with `service` for those questions alone. Oldest first.
+ */
+export async function listQuestionsFor(db: Db, service: Db, filter: BankFilter): Promise<BankListItem[]> {
   let query = db
     .from("questions")
     .select(
-      "id, type, status, difficulty, current_version, topics!inner(name), question_versions!inner(version, stem, source_refs, conflict_note)",
+      "id, type, status, difficulty, current_version, topics!inner(name), question_versions!inner(version, stem, source_refs)",
     );
   if (filter.status) query = query.eq("status", filter.status);
   if (filter.type) query = query.eq("type", filter.type);
@@ -188,40 +212,48 @@ export async function listQuestionsFor(db: Db, filter: BankFilter): Promise<Bank
   const { data, error } = await query.order("created_at").order("id");
   if (error) throw new Error(`Could not read the question bank: ${error.message}`);
 
-  return data.flatMap((row) => {
+  const rows = data.flatMap((row) => {
     const version = currentOf(row.question_versions, row.current_version);
     if (!version) return [];
     const refs = parseRefs(version.source_refs);
     if (filter.documentId && !refs.some((ref) => ref.documentId === filter.documentId)) return [];
-    return [
-      {
-        id: row.id,
-        type: row.type,
-        status: row.status,
-        difficulty: row.difficulty,
-        topicName: row.topics.name,
-        stem: version.stem,
-        sourceLabel: sourceLabelOf(refs),
-        hasConflictNote: Boolean(version.conflict_note?.trim()),
-      },
-    ];
+    return [{ row, version, refs }];
   });
+  const notes = await loadConflictNotes(
+    service,
+    rows.map(({ row }) => ({ id: row.id, version: row.current_version })),
+  );
+  return rows.map(({ row, version, refs }) => ({
+    id: row.id,
+    type: row.type,
+    status: row.status,
+    difficulty: row.difficulty,
+    topicName: row.topics.name,
+    stem: version.stem,
+    sourceLabel: sourceLabelOf(refs),
+    hasConflictNote: Boolean(notes.get(`${row.id}:${row.current_version}`)?.trim()),
+  }));
 }
 
 /**
- * One question. With only `db` (a student's client) it returns what row level
- * security lets that user see and no key, review notes or conflict note. With
- * `admin` (the service client, passed only after requireAdmin) it reads
- * everything: the answer key of the current version, review notes, the conflict
- * note and all open flags.
+ * One question. `db` is the caller's own client: it decides whether the question
+ * is visible (RLS) and supplies the visible columns and the caller's flags
+ * (all open flags for an admin, their own for a student). The conflict note is
+ * then read with `service` for that question, for everyone. With `isAdmin`
+ * (the caller has passed the admin check) it also adds the review notes and the
+ * answer key of the current version. A student never gets either.
  */
-export async function questionDetailFor(db: Db, id: string, admin?: Db): Promise<QuestionDetail> {
+export async function questionDetailFor(
+  db: Db,
+  service: Db,
+  id: string,
+  isAdmin: boolean,
+): Promise<QuestionDetail> {
   if (!UUID.test(id)) throw new BankError(NOT_FOUND);
-  const reader = admin ?? db;
-  const { data, error } = await reader
+  const { data, error } = await db
     .from("questions")
     .select(
-      "id, type, status, difficulty, current_version, topics!inner(name), question_versions(version, stem, options, source_refs, conflict_note)",
+      "id, type, status, difficulty, current_version, topics!inner(name), question_versions(version, stem, options, source_refs)",
     )
     .eq("id", id)
     .maybeSingle();
@@ -229,7 +261,25 @@ export async function questionDetailFor(db: Db, id: string, admin?: Db): Promise
   const version = data && currentOf(data.question_versions, data.current_version);
   if (!data || !version) throw new BankError(NOT_FOUND);
 
-  const detail: QuestionDetail = {
+  const { data: flags, error: flagsError } = await db
+    .from("question_flags")
+    .select("comment, created_at")
+    .eq("question_id", id)
+    .is("resolved_at", null)
+    .order("created_at");
+  if (flagsError) throw new Error(`Could not read the flags: ${flagsError.message}`);
+
+  // Everything below runs for a question the user is already allowed to see.
+  const { data: hidden, error: hiddenError } = await service
+    .from("question_versions")
+    .select("conflict_note, review_notes, answer_keys(correct_option_id, explanation, model_answer, key_concepts, rubric)")
+    .eq("question_id", id)
+    .eq("version", version.version)
+    .single();
+  if (hiddenError) throw new Error(`Could not read the question's notes: ${hiddenError.message}`);
+
+  const key = hidden.answer_keys;
+  return {
     id: data.id,
     type: data.type,
     status: data.status,
@@ -240,43 +290,20 @@ export async function questionDetailFor(db: Db, id: string, admin?: Db): Promise
     stem: version.stem,
     options: parseOptions(version.options),
     sourceRefs: parseRefs(version.source_refs).map((ref) => ({ ...ref, label: refHeading(ref) })),
-    conflictNote: null,
-    reviewNotes: [],
-    flags: [],
-    key: null,
+    conflictNote: hidden.conflict_note,
+    reviewNotes: isAdmin ? hidden.review_notes : [],
+    flags: flags.map((f) => ({ comment: f.comment.trim() || null, createdAt: f.created_at })),
+    key:
+      isAdmin && key
+        ? {
+            correctOptionId: key.correct_option_id,
+            explanation: key.explanation,
+            modelAnswer: key.model_answer,
+            keyConcepts: parseKeyConcepts(key.key_concepts),
+            rubric: RubricSchema.safeParse(key.rubric).data ?? null,
+          }
+        : null,
   };
-
-  const { data: flags, error: flagsError } = await reader
-    .from("question_flags")
-    .select("comment, created_at")
-    .eq("question_id", id)
-    .is("resolved_at", null)
-    .order("created_at");
-  if (flagsError) throw new Error(`Could not read the flags: ${flagsError.message}`);
-  detail.flags = flags.map((f) => ({ comment: f.comment.trim() || null, createdAt: f.created_at }));
-
-  if (!admin) return detail;
-
-  const { data: current, error: currentError } = await admin
-    .from("question_versions")
-    .select("review_notes, answer_keys(correct_option_id, explanation, model_answer, key_concepts, rubric)")
-    .eq("question_id", id)
-    .eq("version", version.version)
-    .single();
-  if (currentError) throw new Error(`Could not read the answer key: ${currentError.message}`);
-  const key = current.answer_keys;
-  detail.conflictNote = version.conflict_note;
-  detail.reviewNotes = current.review_notes;
-  detail.key = key
-    ? {
-        correctOptionId: key.correct_option_id,
-        explanation: key.explanation,
-        modelAnswer: key.model_answer,
-        keyConcepts: parseKeyConcepts(key.key_concepts),
-        rubric: RubricSchema.safeParse(key.rubric).data ?? null,
-      }
-    : null;
-  return detail;
 }
 
 // ----------------------------------------------------------------- writes
@@ -394,6 +421,9 @@ export async function approveRecord(service: Db, id: string): Promise<void> {
 export async function rejectRecord(service: Db, id: string, reason: string): Promise<void> {
   const text = reason.replace(/\s+/g, " ").trim();
   if (!text) throw new BankError("Give a reason for rejecting this question");
+  if (text.length > MAX_REASON_CHARS) {
+    throw new BankError(`Keep the reason under ${MAX_REASON_CHARS} characters`);
+  }
   const state = await loadState(service, id);
   const { to } = decide(state.status, "reject", "admin");
   if (!(await setStatus(service, id, state.status, to, `Rejected: ${text}`))) throw new BankError(CHANGED);
@@ -434,7 +464,7 @@ export async function flagRecord(
 }
 
 function throwIfAny(issues: string[]): void {
-  if (issues.length > 0) throw new BankError(issues.join(". "));
+  if (issues.length > 0) throw new BankError(issues.join(". "), issues);
 }
 
 /** The edited question's text and key, validated; throws a BankError listing every problem. */
@@ -505,14 +535,21 @@ export function buildEditedQuestion(
 }
 
 function versionError(message: string): Error {
+  if (/Version changed/.test(message)) return new BankError(STALE);
   return /cannot get a new version/.test(message)
     ? new BankError(CHANGED)
     : new Error(`Could not save the new version: ${message}`);
 }
 
 /** Saves an admin's edit as the next version (the old one and its key are kept) and makes it active. */
-export async function editRecord(service: Db, id: string, edit: QuestionEdit): Promise<{ version: number }> {
+export async function editRecord(
+  service: Db,
+  id: string,
+  edit: QuestionEdit,
+  expectedVersion: number,
+): Promise<{ version: number }> {
   const state = await loadState(service, id);
+  if (state.version !== expectedVersion) throw new BankError(STALE);
   const { to } = decide(state.status, "edit", "admin");
   const built = buildEditedQuestion({ type: state.type, options: state.options, ...state.key }, edit);
   const { data, error } = await service.rpc("create_question_version", {
@@ -528,6 +565,7 @@ export async function editRecord(service: Db, id: string, edit: QuestionEdit): P
     },
     p_key: built.key,
     p_status: to,
+    p_expected_version: expectedVersion,
   });
   if (error) throw versionError(error.message);
   return { version: data };
@@ -545,8 +583,10 @@ export async function regenerateRecord(
   service: Db,
   ai: AiClient,
   id: string,
+  expectedVersion: number,
 ): Promise<{ status: QuestionStatus }> {
   const state = await loadState(service, id);
+  if (state.version !== expectedVersion) throw new BankError(STALE);
   const { to } = decide(state.status, "regenerate", "admin");
   if (state.type === "essay") throw new BankError("Essay questions cannot be regenerated here");
 
@@ -609,6 +649,7 @@ export async function regenerateRecord(
       rubric: saq?.rubric ?? null,
     },
     p_status: to,
+    p_expected_version: expectedVersion,
   });
   if (error) throw versionError(error.message);
 

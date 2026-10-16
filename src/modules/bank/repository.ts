@@ -26,19 +26,15 @@ export type {
 /** Runs as the signed-in user, so students only ever see active and flagged questions. */
 export async function listQuestions(filter: BankFilter): Promise<BankListItem[]> {
   await requireUser();
-  return listQuestionsFor(await createServerSupabase(), filter);
+  return listQuestionsFor(await createServerSupabase(), createServiceSupabase(), filter);
 }
 
 /**
- * A student gets the question without its key. An admin also gets the key,
- * review notes and conflict note, read with the service client (which this
- * branch alone reaches, after the session says admin).
+ * Visibility comes from the user's own client. Everyone gets the conflict note
+ * (read with the service client); only an admin (the session says so) also gets
+ * the review notes and the answer key. A student never does.
  */
 export async function getQuestionDetail(id: string): Promise<QuestionDetail> {
   const user = await requireUser();
-  return questionDetailFor(
-    await createServerSupabase(),
-    id,
-    user.role === "admin" ? createServiceSupabase() : undefined,
-  );
+  return questionDetailFor(await createServerSupabase(), createServiceSupabase(), id, user.role === "admin");
 }
