@@ -12,6 +12,8 @@ import { requireUser } from "@/lib/auth";
 import { createServerSupabase } from "@/lib/supabase/server";
 import { SlideList } from "@/components/materials/SlideList";
 import { parseTables, type SlideView } from "@/components/materials/slideReview";
+import { CoverageReportView } from "@/components/materials/CoverageReportView";
+import { getCoverageReport } from "@/modules/generation/coverageServer";
 import { getLatestJob } from "@/modules/ingestion/upload";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -89,6 +91,8 @@ export default async function DocumentPage({
     requestedJobId: job && UUID.test(job) ? job : null,
   });
 
+  const coverage = doc.status === "ready" ? await getCoverageReport(docId) : null;
+
   return (
     <>
       <h1 className="text-3xl font-bold">{doc.title}</h1>
@@ -107,7 +111,7 @@ export default async function DocumentPage({
         </p>
       ) : null}
       {view.poll ? <AutoRefresh everyMs={isAdmin ? 5_000 : 15_000} /> : null}
-      {/* Task 14 adds the "Coverage report" section here. */}
+      {coverage ? <CoverageReportView report={coverage} /> : null}
       {pages.length > 0 ? (
         <ul aria-label="Pages" className="mt-6 grid max-w-xl gap-2">
           {pages.map((page) => (
