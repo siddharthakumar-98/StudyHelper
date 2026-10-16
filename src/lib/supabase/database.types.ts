@@ -343,8 +343,16 @@ isOneToOne: false
 "delete_stale_draft_batches":
 { Args: { "p_keep_batch_keys": (string)[],"p_run_id": string }; Returns: number
                            },
+"find_similar_stems":
+{ Args: { "p_exclude_question": string,"p_stem": string,"p_threshold"?: number }; Returns: {
+              "question_id": string,"sim": number,"stem": string
+            }[]
+                           },
 "is_admin":
 { Args: Record<PropertyKey, never>; Returns: boolean
+                           },
+"record_question_check":
+{ Args: { "p_conflict_note": string,"p_notes": (string)[],"p_question_id": string,"p_status": Database["public"]['Enums']["question_status"],"p_version": number }; Returns: boolean
                            },
 "replace_page_slides":
 { Args: { "p_page_id": string,"p_slides": Json }; Returns: number

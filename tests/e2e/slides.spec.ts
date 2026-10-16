@@ -3,7 +3,7 @@ import { loginAs } from "./helpers";
 import { makePdf } from "../fixtures/makePdf";
 
 // AI_FAKE=1 (set by the Playwright web server): one clear slide per page. The
-// pipeline then stops at verify, which has no handler yet; only slides are asserted.
+// pipeline runs through verify with the fakes, so the handout ends "Ready".
 
 async function uploadTwoPageHandout(page: Page, title: string): Promise<string> {
   await page.goto("/materials");
@@ -66,6 +66,14 @@ test.describe("slide review", () => {
     );
     await expect(card(page, 1).getByText("Corrected", { exact: true })).toBeVisible();
     await expect(card(page, 2).getByText("Corrected", { exact: true })).toHaveCount(0);
+
+    // The fake pipeline finishes: questions are written and checked, the handout is ready.
+    // Reload until then: a page rendered just as the last job finishes has no runner
+    // left to refresh it.
+    await expect(async () => {
+      await page.reload();
+      await expect(page.getByText(/· Ready$/)).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 90_000 });
 
     // "View photo" opens a signed URL that works.
     // The browser's own request for the opened photo must succeed. (Which viewer shows a

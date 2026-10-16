@@ -2,17 +2,17 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Json } from "@/lib/supabase/database.types";
 import type { JobHandler } from "@/modules/jobs/types";
 import type { GeneratedMcq, GeneratedSaq } from "@/modules/ai/schemas/generation";
-import { MATERIALS_BUCKET } from "@/modules/ingestion/paths";
 import { slideLabel } from "@/modules/ingestion/slideLabel";
 import {
   generateForTopic,
-  needsPagePhoto,
+  loadPagePhotos,
   planTopicBatches,
   targetsFor,
-  type SlideForGeneration,
+  type SlideWithPage,
 } from "./generate";
 import { buildTopicMap, reconcileTopicMap, slideExcerpt, type TopicMapSlide } from "./topicMap";
 import { AUTO_CHECK_PREFIX, isMcq, validateGenerated } from "./validate";
+import { processDraftQuestion } from "./verify";
 
 /**
  * One step groups the handout's readable slides into topics (reusing topic names
@@ -87,7 +87,7 @@ export const topicMapHandler: JobHandler = async ({ db, ai, documentId }) => {
 
 type Db = SupabaseClient<Database>;
 
-type PlanSlide = SlideForGeneration & { pageNo: number; positionOnPage: number; storagePath: string };
+type PlanSlide = SlideWithPage & { positionOnPage: number };
 
 type PlanBatch = {
   topicId: string;
@@ -174,23 +174,6 @@ async function loadAvoidStems(db: Db, batch: PlanBatch, runId: string): Promise<
     )
     .map((q) => q.question_versions.find((v) => v.version === q.current_version)?.stem)
     .filter((stem): stem is string => Boolean(stem));
-}
-
-/** The page files of the batch's slides that get a photo, one per page. */
-async function loadPagePhotos(db: Db, slides: PlanSlide[]): Promise<Map<string, Uint8Array>> {
-  const pages = new Map<string, PlanSlide>();
-  for (const slide of slides) {
-    if (needsPagePhoto(slide) && !pages.has(slide.pageId)) pages.set(slide.pageId, slide);
-  }
-  const photos = new Map<string, Uint8Array>();
-  for (const [pageId, slide] of pages) {
-    const { data, error } = await db.storage.from(MATERIALS_BUCKET).download(slide.storagePath);
-    if (error || !data) {
-      throw new Error(`Could not read page ${slide.pageNo}: ${error?.message ?? "missing"}`);
-    }
-    photos.set(pageId, new Uint8Array(await data.arrayBuffer()));
-  }
-  return photos;
 }
 
 /** One question as save_generated_questions expects it, with its pre-check notes. */
@@ -312,4 +295,72 @@ export const generateHandler: JobHandler = async ({ db, ai, documentId, step, pa
   if (step < plan.length - 1) return { done: false, progress };
   await deleteStaleDrafts(db, runId, plan);
   return { done: true, progress, next };
+};
+
+/** Most draft questions one verify step checks. */
+export const VERIFY_BATCH_SIZE = 5;
+
+/**
+ * Once a verify step has run this long it starts no further question, so a step
+ * of slow verifier calls stays inside the 300 s route limit. Each question's
+ * outcome is saved as soon as it is checked, so stopping early loses nothing.
+ */
+const VERIFY_STEP_BUDGET_MS = 150_000;
+
+async function countRunQuestions(db: Db, runId: string, draftsOnly: boolean): Promise<number> {
+  let query = db.from("questions").select("id", { count: "exact", head: true }).eq("generation_run_id", runId);
+  if (draftsOnly) query = query.eq("status", "draft");
+  const { count, error } = await query;
+  if (error || count === null) {
+    throw new Error(`Could not count the run's questions: ${error?.message ?? "no count"}`);
+  }
+  return count;
+}
+
+/**
+ * Each step checks up to 5 of the run's draft questions, oldest first
+ * (processDraftQuestion: pre-check notes, duplicates, then the independent
+ * verifier). When no drafts remain, the run is completed and the handout is
+ * ready. Safe to re-run: only drafts are processed.
+ */
+export const verifyHandler: JobHandler = async ({ db, ai, documentId, payload }) => {
+  const runId = payload.runId;
+  if (typeof runId !== "string" || !runId) throw new Error("The verify job has no generation run");
+
+  const { data: drafts, error } = await db
+    .from("questions")
+    .select("id")
+    .eq("generation_run_id", runId)
+    .eq("status", "draft")
+    .order("created_at")
+    .order("id")
+    .limit(VERIFY_BATCH_SIZE);
+  if (error) throw new Error(`Could not read the questions to check: ${error.message}`);
+
+  const started = Date.now();
+  for (const [i, draft] of drafts.entries()) {
+    if (i > 0 && Date.now() - started > VERIFY_STEP_BUDGET_MS) break;
+    await processDraftQuestion(draft.id, { db, ai, documentId });
+  }
+
+  const [total, remaining] = await Promise.all([
+    countRunQuestions(db, runId, false),
+    countRunQuestions(db, runId, true),
+  ]);
+  const progress = {
+    current: total - remaining,
+    total,
+    label: `Checking questions (${total - remaining} of ${total})`,
+  };
+  if (remaining > 0) return { done: false, progress };
+
+  const { error: runError } = await db
+    .from("generation_runs")
+    .update({ completed_at: new Date().toISOString() })
+    .eq("id", runId)
+    .is("completed_at", null);
+  if (runError) throw new Error(`Could not complete the generation run: ${runError.message}`);
+  const { error: docError } = await db.from("documents").update({ status: "ready" }).eq("id", documentId);
+  if (docError) throw new Error(`Could not mark the handout ready: ${docError.message}`);
+  return { done: true, progress };
 };

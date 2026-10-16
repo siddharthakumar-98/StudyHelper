@@ -1,7 +1,10 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/lib/supabase/database.types";
 import type { AiClient } from "@/modules/ai/client";
 import { GENERATE_QUESTIONS_PROMPT } from "@/modules/ai/prompts/generateQuestions";
 import { GenerationResultSchema, type GenerationResult } from "@/modules/ai/schemas/generation";
+import { MATERIALS_BUCKET } from "@/modules/ingestion/paths";
 
 export type SlideForGeneration = {
   id: string;
@@ -12,6 +15,9 @@ export type SlideForGeneration = {
   tables: unknown[];
   diagram_description: string | null;
 };
+
+/** A slide with where its page photo is stored. */
+export type SlideWithPage = SlideForGeneration & { pageNo: number; storagePath: string };
 
 /** A batch's expected output must stay well under the generate task's max_tokens. */
 export const MAX_SLIDES_PER_BATCH = 6;
@@ -75,7 +81,7 @@ function startsWith(bytes: Uint8Array, signature: number[]): boolean {
 }
 
 /** A page's bytes as a content block; the type is read from the file's signature. */
-function pageBlock(bytes: Uint8Array): Anthropic.Beta.BetaContentBlockParam {
+export function pageBlock(bytes: Uint8Array): Anthropic.Beta.BetaContentBlockParam {
   const data = Buffer.from(bytes).toString("base64");
   if (startsWith(bytes, [0x25, 0x50, 0x44, 0x46])) {
     return { type: "document", source: { type: "base64", media_type: "application/pdf", data } };
@@ -89,13 +95,57 @@ function pageBlock(bytes: Uint8Array): Anthropic.Beta.BetaContentBlockParam {
   throw new Error("A page photo is not a PDF, JPG or PNG");
 }
 
-function slideBlock(slide: SlideForGeneration, alias: string): string {
+/** One slide as the model sees it: its short id and label, title, text, tables and diagram. */
+export function slideBlock(slide: SlideForGeneration, alias: string): string {
   const lines = [`[${alias}] ${slide.label}`, `Title: ${slide.title ?? "(none)"}`];
   lines.push(`Text:\n${slide.verbatim_text.trim() || "(none)"}`);
   const rows = tableLines(slide.tables);
   if (rows.length > 0) lines.push(`Tables:\n${rows.join("\n")}`);
   if (slide.diagram_description?.trim()) lines.push(`Diagram: ${slide.diagram_description.trim()}`);
   return lines.join("\n");
+}
+
+/** The page files of the slides that get a photo (needsPagePhoto), one per page. */
+export async function loadPagePhotos(
+  db: SupabaseClient<Database>,
+  slides: SlideWithPage[],
+): Promise<Map<string, Uint8Array>> {
+  const pages = new Map<string, SlideWithPage>();
+  for (const slide of slides) {
+    if (needsPagePhoto(slide) && !pages.has(slide.pageId)) pages.set(slide.pageId, slide);
+  }
+  const photos = new Map<string, Uint8Array>();
+  for (const [pageId, slide] of pages) {
+    const { data, error } = await db.storage.from(MATERIALS_BUCKET).download(slide.storagePath);
+    if (error || !data) {
+      throw new Error(`Could not read page ${slide.pageNo}: ${error?.message ?? "missing"}`);
+    }
+    photos.set(pageId, new Uint8Array(await data.arrayBuffer()));
+  }
+  return photos;
+}
+
+/**
+ * The content blocks for the page photos of `slides` (aliases[i] is slides[i]'s
+ * short id): one photo per page, after a line naming the slides on it, only for
+ * slides that need one and whose page is in pageDocs.
+ */
+export function pagePhotoBlocks(
+  slides: SlideForGeneration[],
+  aliases: string[],
+  pageDocs: Map<string, Uint8Array>,
+): Anthropic.Beta.BetaContentBlockParam[] {
+  const photoAliases = new Map<string, string[]>();
+  slides.forEach((slide, i) => {
+    if (!needsPagePhoto(slide) || !pageDocs.has(slide.pageId)) return;
+    photoAliases.set(slide.pageId, [...(photoAliases.get(slide.pageId) ?? []), aliases[i]]);
+  });
+  const blocks: Anthropic.Beta.BetaContentBlockParam[] = [];
+  for (const [pageId, onPage] of photoAliases) {
+    blocks.push({ type: "text", text: `Page photo for ${onPage.join(", ")}:` });
+    blocks.push(pageBlock(pageDocs.get(pageId)!));
+  }
+  return blocks;
 }
 
 /** Most characters of one context slide's excerpt. */
@@ -213,16 +263,10 @@ export async function generateForTopic(
   }
   const text = sections.join("\n\n");
 
-  const content: Anthropic.Beta.BetaContentBlockParam[] = [{ type: "text", text }];
-  const photoAliases = new Map<string, string[]>();
-  input.slides.forEach((slide, i) => {
-    if (!needsPagePhoto(slide) || !input.pageDocs.has(slide.pageId)) return;
-    photoAliases.set(slide.pageId, [...(photoAliases.get(slide.pageId) ?? []), aliases[i]]);
-  });
-  for (const [pageId, onPage] of photoAliases) {
-    content.push({ type: "text", text: `Page photo for ${onPage.join(", ")}:` });
-    content.push(pageBlock(input.pageDocs.get(pageId)!));
-  }
+  const content: Anthropic.Beta.BetaContentBlockParam[] = [
+    { type: "text", text },
+    ...pagePhotoBlocks(input.slides, aliases, input.pageDocs),
+  ];
 
   const firstQuoted = input.slides.findIndex((s) => slideSourceText(s).trim());
   const { data } = await ai.callStructured({

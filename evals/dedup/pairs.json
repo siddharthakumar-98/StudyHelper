@@ -1,0 +1,145 @@
+{
+  "_note": "Dedup eval pairs written from facts in 'IMA CGP FCD Class 1213March2026.pdf' (slide numbers in 'fact'). 'duplicate' pairs test the same fact in different words; 'distinct' pairs share a topic, and often most of their wording, but test different facts. The runner inserts each 'first' as an active question, then checks each 'second' with find_similar_stems + checkDuplicate. Targets: >= 9/10 duplicates caught, 0/10 false merges.",
+  "pairs": [
+    {
+      "id": "dup-ci-ratio",
+      "kind": "duplicate",
+      "fact": "#41: C:I ratio = 500/TDD",
+      "first": { "type": "mcq", "stem": "How is the carbohydrate-to-insulin (C:I) ratio calculated from the total daily insulin dose?" },
+      "second": { "type": "mcq", "stem": "Using the total daily insulin dose (TDD), how is the C:I ratio estimated?" }
+    },
+    {
+      "id": "dup-correction-factor",
+      "kind": "duplicate",
+      "fact": "#42: correction factor = 1650/TDD",
+      "first": { "type": "mcq", "stem": "Which formula gives the insulin correction factor from the total daily dose?" },
+      "second": { "type": "mcq", "stem": "How is the correction factor (CF) for insulin worked out from the total daily dose?" }
+    },
+    {
+      "id": "dup-level2-hypo",
+      "kind": "duplicate",
+      "fact": "#90: level 2 hypoglycaemia is glucose <54 mg/dL",
+      "first": { "type": "mcq", "stem": "Below which blood glucose value is level 2 hypoglycaemia defined?" },
+      "second": { "type": "mcq", "stem": "What blood glucose threshold defines level 2 hypoglycaemia?" }
+    },
+    {
+      "id": "dup-gdm-postpartum",
+      "kind": "duplicate",
+      "fact": "#61: women with GDM are screened for T2D 6 weeks postpartum",
+      "first": { "type": "mcq", "stem": "When should a woman with gestational diabetes be screened for type 2 diabetes after delivery?" },
+      "second": { "type": "mcq", "stem": "After delivery, at what time should women who had gestational diabetes be tested for type 2 diabetes?" }
+    },
+    {
+      "id": "dup-sglt2i-hf",
+      "kind": "duplicate",
+      "fact": "#38: SGLT2 inhibitors reduce heart-failure hospitalisation",
+      "first": { "type": "mcq", "stem": "Which class of glucose-lowering drugs reduces hospitalisation for heart failure in type 2 diabetes?" },
+      "second": { "type": "mcq", "stem": "In type 2 diabetes with heart failure, which glucose-lowering drug class lowers heart failure hospitalisation?" }
+    },
+    {
+      "id": "dup-metformin-titration",
+      "kind": "duplicate",
+      "fact": "#36: start metformin low and titrate slowly to limit GI side effects",
+      "first": { "type": "mcq", "stem": "How should metformin be started and titrated to reduce its gastrointestinal side effects?" },
+      "second": { "type": "mcq", "stem": "Which way of starting and increasing metformin limits gastrointestinal side effects?" }
+    },
+    {
+      "id": "dup-prediabetes-weight",
+      "kind": "duplicate",
+      "fact": "#54: prediabetes lifestyle goal of >=7% weight loss",
+      "first": { "type": "mcq", "stem": "What percentage of body weight loss is recommended for people with prediabetes?" },
+      "second": { "type": "mcq", "stem": "How much body weight should a person with prediabetes aim to lose, as a percentage?" }
+    },
+    {
+      "id": "dup-prediabetes-activity",
+      "kind": "duplicate",
+      "fact": "#54: prediabetes lifestyle goal of >=150 min/week of activity",
+      "first": { "type": "mcq", "stem": "How many minutes per week of physical activity are recommended for people with prediabetes?" },
+      "second": { "type": "mcq", "stem": "What weekly amount of physical activity, in minutes, is advised in prediabetes?" }
+    },
+    {
+      "id": "dup-rule-of-15",
+      "kind": "duplicate",
+      "fact": "#91: rule of 15 (15 g fast carbohydrate, recheck after 15 minutes)",
+      "first": { "type": "saq", "stem": "Describe the rule of 15 for treating hypoglycaemia." },
+      "second": { "type": "saq", "stem": "Explain how the 'rule of 15' is used to treat hypoglycaemia." }
+    },
+    {
+      "id": "dup-ada-a1c",
+      "kind": "duplicate",
+      "fact": "#43: ADA A1c goal <7% for most non-pregnant adults",
+      "first": { "type": "mcq", "stem": "What A1c goal does the ADA recommend for most non-pregnant adults with diabetes?" },
+      "second": { "type": "mcq", "stem": "For most adults with diabetes who are not pregnant, what is the ADA's A1c target?" }
+    },
+    {
+      "id": "distinct-ci-vs-cf",
+      "kind": "distinct",
+      "fact": "#41 C:I ratio = 500/TDD vs #42 correction factor = 1650/TDD",
+      "first": { "type": "mcq", "stem": "How is the carbohydrate-to-insulin ratio estimated from the total daily insulin dose?" },
+      "second": { "type": "mcq", "stem": "How is the insulin correction factor estimated from the total daily insulin dose?" }
+    },
+    {
+      "id": "distinct-hypo-level1-vs-level2",
+      "kind": "distinct",
+      "fact": "#90: level 1 (<70 and >=54 mg/dL) vs level 2 (<54 mg/dL)",
+      "first": { "type": "mcq", "stem": "Which blood glucose range defines level 1 hypoglycaemia?" },
+      "second": { "type": "mcq", "stem": "Which blood glucose value defines level 3 hypoglycaemia?" }
+    },
+    {
+      "id": "distinct-hypo-levels-saq-vs-mcq",
+      "kind": "distinct",
+      "fact": "#90: all three levels (SAQ) vs the level 2 threshold alone (MCQ)",
+      "first": { "type": "saq", "stem": "Describe the three levels of hypoglycaemia and how each is defined." },
+      "second": { "type": "mcq", "stem": "Below which glucose value does level 2 hypoglycaemia begin?" }
+    },
+    {
+      "id": "distinct-gdm-timing-vs-test",
+      "kind": "distinct",
+      "fact": "#61: when to screen after GDM vs which test to use",
+      "first": { "type": "mcq", "stem": "When should women with gestational diabetes be screened for type 2 diabetes after delivery?" },
+      "second": { "type": "mcq", "stem": "Which test should be used to screen women with gestational diabetes for type 2 diabetes after delivery?" }
+    },
+    {
+      "id": "distinct-sglt2i-hf-vs-ckd",
+      "kind": "distinct",
+      "fact": "#38-39: SGLT2i in heart failure vs in chronic kidney disease",
+      "first": { "type": "mcq", "stem": "Which drug class reduces hospitalisation for heart failure in people with type 2 diabetes?" },
+      "second": { "type": "mcq", "stem": "Which drug class slows the progression of chronic kidney disease in people with type 2 diabetes?" }
+    },
+    {
+      "id": "distinct-metformin-gi-vs-b12",
+      "kind": "distinct",
+      "fact": "#36: metformin GI side effects vs vitamin B12 deficiency",
+      "first": { "type": "mcq", "stem": "Which side effect of metformin is reduced by slow dose titration?" },
+      "second": { "type": "mcq", "stem": "Which vitamin deficiency is linked to long-term metformin use?" }
+    },
+    {
+      "id": "distinct-prediabetes-weight-vs-activity",
+      "kind": "distinct",
+      "fact": "#54: >=7% weight loss vs >=150 min/week activity",
+      "first": { "type": "mcq", "stem": "How much weight loss is advised for people with prediabetes?" },
+      "second": { "type": "mcq", "stem": "How much physical activity per week is advised for people with prediabetes?" }
+    },
+    {
+      "id": "distinct-tzd-vs-saxagliptin-hf",
+      "kind": "distinct",
+      "fact": "#39: why TZDs vs why saxagliptin are avoided in heart failure",
+      "first": { "type": "mcq", "stem": "Why should thiazolidinediones be avoided in patients with heart failure?" },
+      "second": { "type": "mcq", "stem": "Why should saxagliptin be avoided in patients with heart failure?" }
+    },
+    {
+      "id": "distinct-ada-vs-aace-a1c",
+      "kind": "distinct",
+      "fact": "#43: ADA goal <7% vs AACE goal <=6.5%",
+      "first": { "type": "mcq", "stem": "What A1c goal does the ADA recommend for most adults with diabetes?" },
+      "second": { "type": "mcq", "stem": "What A1c goal does the AACE recommend for most adults with diabetes?" }
+    },
+    {
+      "id": "distinct-basal-vs-bolus",
+      "kind": "distinct",
+      "fact": "#31: role of basal vs bolus insulin",
+      "first": { "type": "saq", "stem": "Explain the role of basal insulin in a basal-bolus regimen." },
+      "second": { "type": "saq", "stem": "Explain the role of bolus insulin in a basal-bolus regimen." }
+    }
+  ]
+}
