@@ -13,7 +13,8 @@
     "typecheck": "next typegen && tsc --noEmit",
     "seed:users": "tsx --env-file=.env.local scripts/seed-users.ts",
     "eval:extraction": "tsx --env-file=.env.local evals/extraction/run.ts",
-    "eval:dedup": "tsx --env-file=.env.local evals/dedup/run.ts"
+    "eval:dedup": "tsx --env-file=.env.local evals/dedup/run.ts",
+    "eval:audit-sample": "tsx --env-file=.env.local evals/generation/auditSample.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.134.0",
