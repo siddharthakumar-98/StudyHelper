@@ -301,11 +301,13 @@ export const generateHandler: JobHandler = async ({ db, ai, documentId, step, pa
 export const VERIFY_BATCH_SIZE = 5;
 
 /**
- * Once a verify step has run this long it starts no further question, so a step
- * of slow verifier calls stays inside the 300 s route limit. Each question's
- * outcome is saved as soon as it is checked, so stopping early loses nothing.
+ * A verify step starts another draft only while it has run less than this. One
+ * question can take a dedup call and a verifier call, so starting late would
+ * push the step past the 300 s route limit; a killed step is retried and counts
+ * an attempt. Each question's outcome is saved as soon as it is checked, so
+ * stopping early loses nothing: the next step continues with the next draft.
  */
-const VERIFY_STEP_BUDGET_MS = 150_000;
+export const VERIFY_START_WINDOW_MS = 60_000;
 
 async function countRunQuestions(db: Db, runId: string, draftsOnly: boolean): Promise<number> {
   let query = db.from("questions").select("id", { count: "exact", head: true }).eq("generation_run_id", runId);
@@ -318,7 +320,8 @@ async function countRunQuestions(db: Db, runId: string, draftsOnly: boolean): Pr
 }
 
 /**
- * Each step checks up to 5 of the run's draft questions, oldest first
+ * Each step checks up to 5 of the run's draft questions, oldest first, starting
+ * a new one only within VERIFY_START_WINDOW_MS of the step's start
  * (processDraftQuestion: pre-check notes, duplicates, then the independent
  * verifier). When no drafts remain, the run is completed and the handout is
  * ready. Safe to re-run: only drafts are processed.
@@ -338,8 +341,8 @@ export const verifyHandler: JobHandler = async ({ db, ai, documentId, payload })
   if (error) throw new Error(`Could not read the questions to check: ${error.message}`);
 
   const started = Date.now();
-  for (const [i, draft] of drafts.entries()) {
-    if (i > 0 && Date.now() - started > VERIFY_STEP_BUDGET_MS) break;
+  for (const draft of drafts) {
+    if (Date.now() - started >= VERIFY_START_WINDOW_MS) break;
     await processDraftQuestion(draft.id, { db, ai, documentId });
   }
 

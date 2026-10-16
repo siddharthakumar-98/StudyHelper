@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase/database.types";
+import { normalizeForMatch } from "@/lib/text";
 import type { AiClient } from "@/modules/ai/client";
 import { DEDUP_PROMPT } from "@/modules/ai/prompts/dedup";
 import { VERIFY_QUESTION_PROMPT } from "@/modules/ai/prompts/verifyQuestion";
@@ -19,8 +20,20 @@ import { AUTO_CHECK_PREFIX } from "./validate";
 
 type Db = SupabaseClient<Database>;
 
-/** A candidate at least this similar (trigram) is a duplicate without asking the model. */
-export const DUPLICATE_AUTO_THRESHOLD = 0.9;
+/**
+ * Bank questions at least this similar (trigram) to a new stem are dedup
+ * candidates (find_similar_stems' p_threshold).
+ */
+export const SIMILAR_STEM_THRESHOLD = 0.3;
+
+/**
+ * A candidate at least this similar, of the same type and with the same answer
+ * (after normalising), is a duplicate without asking the model.
+ */
+export const DUPLICATE_AUTO_THRESHOLD = 0.98;
+
+/** The most characters of an answer the dedup model is shown. */
+export const ANSWER_EXCERPT_CHARS = 200;
 
 /** Prefix of the review notes the verifier writes. */
 export const VERIFIER_PREFIX = "Verifier: ";
@@ -37,38 +50,73 @@ export type QuestionWithKey = {
   explanation: string | null;
   modelAnswer: string | null;
   rubric: Rubric | null;
+  /** The version's conflict note, shown to the verifier so it reports only new conflicts. */
+  conflictNote: string | null;
 };
 
-export type SimilarStem = { question_id: string; stem: string; sim: number };
+/** What dedup compares: the stem, the type and the answer (correct option text or model answer). */
+export type DedupQuestion = { id: string; type: "mcq" | "saq"; stem: string; answer: string };
+
+/** A find_similar_stems row. */
+export type SimilarStem = {
+  question_id: string;
+  type: "mcq" | "saq";
+  stem: string;
+  answer: string;
+  sim: number;
+};
+
+/** The answer dedup compares: an MCQ's correct option text, or an SAQ's model answer. */
+export function answerText(q: QuestionWithKey): string {
+  if (q.type === "mcq") return q.options?.find((o) => o.id === q.correctOptionId)?.text ?? "";
+  return q.modelAnswer ?? "";
+}
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
 
+function excerpt(answer: string): string {
+  const text = oneLine(answer);
+  return text.length > ANSWER_EXCERPT_CHARS ? `${text.slice(0, ANSWER_EXCERPT_CHARS)}…` : text || "(none)";
+}
+
+const TYPE_LABEL = { mcq: "MCQ", saq: "SAQ" } as const;
+
 /**
  * Whether `q` tests the same fact as one of `candidates` (find_similar_stems
- * rows). No candidates: not a duplicate, no AI call. A top candidate at
- * DUPLICATE_AUTO_THRESHOLD or above: a duplicate of it, no AI call. Otherwise
- * one dedup call that sees the stems under short ids (Q1, Q2, ...); an id the
- * model invents is not a duplicate.
+ * rows). No candidates: not a duplicate, no AI call. A candidate with a stem at
+ * least DUPLICATE_AUTO_THRESHOLD similar, the same type and the same answer
+ * (normalizeForMatch): a duplicate of it, no AI call. Otherwise one dedup call
+ * that sees each question's type, stem and answer, with candidates under short
+ * ids (Q1, Q2, ...); an id the model invents is not a duplicate.
  */
 export async function checkDuplicate(
-  q: { id: string; stem: string },
+  q: DedupQuestion,
   candidates: SimilarStem[],
   ai: AiClient,
   documentId: string,
 ): Promise<{ duplicateOf: string | null; reason: string }> {
   if (candidates.length === 0) return { duplicateOf: null, reason: "" };
-  const top = candidates.reduce((best, c) => (c.sim > best.sim ? c : best));
-  if (top.sim >= DUPLICATE_AUTO_THRESHOLD) {
+  const answer = normalizeForMatch(q.answer);
+  const same = candidates.find(
+    (c) =>
+      c.sim >= DUPLICATE_AUTO_THRESHOLD &&
+      c.type === q.type &&
+      answer !== "" &&
+      normalizeForMatch(c.answer) === answer,
+  );
+  if (same) {
     return {
-      duplicateOf: top.question_id,
-      reason: `Nearly identical wording (similarity ${top.sim.toFixed(2)})`,
+      duplicateOf: same.question_id,
+      reason: `Same type and answer, nearly identical wording (similarity ${same.sim.toFixed(2)})`,
     };
   }
 
   const aliases = candidates.map((_, i) => `Q${i + 1}`);
+  const block = (head: string, x: { stem: string; answer: string }) =>
+    `${head}\nStem: ${oneLine(x.stem)}\nAnswer: ${excerpt(x.answer)}`;
   const text = [
-    `New question:\n${oneLine(q.stem)}`,
-    `Existing questions:\n${candidates.map((c, i) => `[${aliases[i]}] ${oneLine(c.stem)}`).join("\n")}`,
+    block(`New question (${TYPE_LABEL[q.type]}):`, q),
+    `Existing questions:\n\n${candidates.map((c, i) => block(`[${aliases[i]}] ${TYPE_LABEL[c.type]}`, c)).join("\n\n")}`,
   ].join("\n\n");
   const { data } = await ai.callStructured({
     task: "dedup",
@@ -144,6 +192,7 @@ export async function verifyQuestion(
   const text = [
     questionSection(q),
     `Passage the writer says proves the answer:\n${q.basisQuote}`,
+    `Conflict note already on the question:\n${q.conflictNote?.trim() || "(none)"}`,
     `Cited slides:\n\n${slides.map((slide, i) => slideBlock(slide, aliases[i])).join("\n\n")}`,
   ].join("\n\n");
   const content: Anthropic.Beta.BetaContentBlockParam[] = [
@@ -188,7 +237,7 @@ async function loadQuestion(db: Db, questionId: string): Promise<LoadedQuestion>
   const { data, error } = await db
     .from("questions")
     .select(
-      "id, type, status, difficulty, current_version, question_versions(version, stem, options, source_refs, basis_quote, review_notes, answer_keys(correct_option_id, explanation, model_answer, rubric))",
+      "id, type, status, difficulty, current_version, question_versions(version, stem, options, source_refs, basis_quote, conflict_note, review_notes, answer_keys(correct_option_id, explanation, model_answer, rubric))",
     )
     .eq("id", questionId)
     .single();
@@ -218,6 +267,7 @@ async function loadQuestion(db: Db, questionId: string): Promise<LoadedQuestion>
       explanation: key.explanation,
       modelAnswer: key.model_answer,
       rubric: RubricSchema.safeParse(key.rubric).data ?? null,
+      conflictNote: version.conflict_note,
     },
   };
 }
@@ -282,6 +332,15 @@ async function record(
   return (await loadQuestion(db, loaded.question.id)).status;
 }
 
+/** find_similar_stems rows as candidates; essays are never compared with MCQs or SAQs. */
+export function toSimilarStems(
+  rows: { question_id: string; type: string; stem: string; answer: string; sim: number }[],
+): SimilarStem[] {
+  return rows.flatMap((row) =>
+    row.type === "mcq" || row.type === "saq" ? [{ ...row, type: row.type }] : [],
+  );
+}
+
 /**
  * Checks one draft question and moves it out of draft:
  *   1. a pre-check ("Auto-check: ") note → verify_fail, no AI call;
@@ -303,12 +362,18 @@ export async function processDraftQuestion(
     return record(db, loaded, "verify_fail", [], null);
   }
 
-  const { data: candidates, error } = await db.rpc("find_similar_stems", {
+  const { data: rows, error } = await db.rpc("find_similar_stems", {
     p_stem: question.stem,
     p_exclude_question: question.id,
+    p_threshold: SIMILAR_STEM_THRESHOLD,
   });
   if (error) throw new Error(`Could not look for similar questions: ${error.message}`);
-  const duplicate = await checkDuplicate(question, candidates, ai, documentId);
+  const duplicate = await checkDuplicate(
+    { id: question.id, type: question.type, stem: question.stem, answer: answerText(question) },
+    toSimilarStems(rows),
+    ai,
+    documentId,
+  );
   if (duplicate.duplicateOf) {
     return record(db, loaded, "mark_duplicate", [`Duplicate of ${duplicate.duplicateOf}: ${duplicate.reason}`], null);
   }

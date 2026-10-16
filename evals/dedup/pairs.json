@@ -1,145 +1,305 @@
 {
-  "_note": "Dedup eval pairs written from facts in 'IMA CGP FCD Class 1213March2026.pdf' (slide numbers in 'fact'). 'duplicate' pairs test the same fact in different words; 'distinct' pairs share a topic, and often most of their wording, but test different facts. The runner inserts each 'first' as an active question, then checks each 'second' with find_similar_stems + checkDuplicate. Targets: >= 9/10 duplicates caught, 0/10 false merges.",
+  "_note": "Dedup eval pairs written from facts in 'IMA CGP FCD Class 1213March2026.pdf' (slide numbers in 'fact'). 'duplicate' pairs test the same fact in different words; 'distinct' pairs share a topic, and often most of their wording, but test different facts. Each stem carries its 'answer' (an MCQ's correct option text, an SAQ's model answer), which dedup compares alongside the stem. The runner inserts each 'first' as an active question with that answer, then checks each 'second' with find_similar_stems + checkDuplicate. Targets: >= 9/10 duplicates caught, 0/10 false merges.",
   "pairs": [
     {
       "id": "dup-ci-ratio",
       "kind": "duplicate",
       "fact": "#41: C:I ratio = 500/TDD",
-      "first": { "type": "mcq", "stem": "How is the carbohydrate-to-insulin (C:I) ratio calculated from the total daily insulin dose?" },
-      "second": { "type": "mcq", "stem": "Using the total daily insulin dose (TDD), how is the C:I ratio estimated?" }
+      "first": {
+        "type": "mcq",
+        "stem": "How is the carbohydrate-to-insulin (C:I) ratio calculated from the total daily insulin dose?",
+        "answer": "500/TDD"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "Using the total daily insulin dose (TDD), how is the C:I ratio estimated?",
+        "answer": "500 divided by the total daily insulin dose"
+      }
     },
     {
       "id": "dup-correction-factor",
       "kind": "duplicate",
       "fact": "#42: correction factor = 1650/TDD",
-      "first": { "type": "mcq", "stem": "Which formula gives the insulin correction factor from the total daily dose?" },
-      "second": { "type": "mcq", "stem": "How is the correction factor (CF) for insulin worked out from the total daily dose?" }
+      "first": {
+        "type": "mcq",
+        "stem": "Which formula gives the insulin correction factor from the total daily dose?",
+        "answer": "1650/TDD"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "How is the correction factor (CF) for insulin worked out from the total daily dose?",
+        "answer": "1650/TDD"
+      }
     },
     {
       "id": "dup-level2-hypo",
       "kind": "duplicate",
       "fact": "#90: level 2 hypoglycaemia is glucose <54 mg/dL",
-      "first": { "type": "mcq", "stem": "Below which blood glucose value is level 2 hypoglycaemia defined?" },
-      "second": { "type": "mcq", "stem": "What blood glucose threshold defines level 2 hypoglycaemia?" }
+      "first": {
+        "type": "mcq",
+        "stem": "Below which blood glucose value is level 2 hypoglycaemia defined?",
+        "answer": "54 mg/dL"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "What blood glucose threshold defines level 2 hypoglycaemia?",
+        "answer": "<54 mg/dL"
+      }
     },
     {
       "id": "dup-gdm-postpartum",
       "kind": "duplicate",
       "fact": "#61: women with GDM are screened for T2D 6 weeks postpartum",
-      "first": { "type": "mcq", "stem": "When should a woman with gestational diabetes be screened for type 2 diabetes after delivery?" },
-      "second": { "type": "mcq", "stem": "After delivery, at what time should women who had gestational diabetes be tested for type 2 diabetes?" }
+      "first": {
+        "type": "mcq",
+        "stem": "When should a woman with gestational diabetes be screened for type 2 diabetes after delivery?",
+        "answer": "At 6 weeks postpartum"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "After delivery, at what time should women who had gestational diabetes be tested for type 2 diabetes?",
+        "answer": "6 weeks after delivery"
+      }
     },
     {
       "id": "dup-sglt2i-hf",
       "kind": "duplicate",
       "fact": "#38: SGLT2 inhibitors reduce heart-failure hospitalisation",
-      "first": { "type": "mcq", "stem": "Which class of glucose-lowering drugs reduces hospitalisation for heart failure in type 2 diabetes?" },
-      "second": { "type": "mcq", "stem": "In type 2 diabetes with heart failure, which glucose-lowering drug class lowers heart failure hospitalisation?" }
+      "first": {
+        "type": "mcq",
+        "stem": "Which class of glucose-lowering drugs reduces hospitalisation for heart failure in type 2 diabetes?",
+        "answer": "SGLT2 inhibitors"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "In type 2 diabetes with heart failure, which glucose-lowering drug class lowers heart failure hospitalisation?",
+        "answer": "SGLT-2 inhibitors (gliflozins)"
+      }
     },
     {
       "id": "dup-metformin-titration",
       "kind": "duplicate",
       "fact": "#36: start metformin low and titrate slowly to limit GI side effects",
-      "first": { "type": "mcq", "stem": "How should metformin be started and titrated to reduce its gastrointestinal side effects?" },
-      "second": { "type": "mcq", "stem": "Which way of starting and increasing metformin limits gastrointestinal side effects?" }
+      "first": {
+        "type": "mcq",
+        "stem": "How should metformin be started and titrated to reduce its gastrointestinal side effects?",
+        "answer": "Start at a low dose and increase it gradually"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "Which way of starting and increasing metformin limits gastrointestinal side effects?",
+        "answer": "Start low and titrate the dose up slowly"
+      }
     },
     {
       "id": "dup-prediabetes-weight",
       "kind": "duplicate",
       "fact": "#54: prediabetes lifestyle goal of >=7% weight loss",
-      "first": { "type": "mcq", "stem": "What percentage of body weight loss is recommended for people with prediabetes?" },
-      "second": { "type": "mcq", "stem": "How much body weight should a person with prediabetes aim to lose, as a percentage?" }
+      "first": {
+        "type": "mcq",
+        "stem": "What percentage of body weight loss is recommended for people with prediabetes?",
+        "answer": "At least 7%"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "How much body weight should a person with prediabetes aim to lose, as a percentage?",
+        "answer": "≥7% of body weight"
+      }
     },
     {
       "id": "dup-prediabetes-activity",
       "kind": "duplicate",
       "fact": "#54: prediabetes lifestyle goal of >=150 min/week of activity",
-      "first": { "type": "mcq", "stem": "How many minutes per week of physical activity are recommended for people with prediabetes?" },
-      "second": { "type": "mcq", "stem": "What weekly amount of physical activity, in minutes, is advised in prediabetes?" }
+      "first": {
+        "type": "mcq",
+        "stem": "How many minutes per week of physical activity are recommended for people with prediabetes?",
+        "answer": "At least 150 minutes per week"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "What weekly amount of physical activity, in minutes, is advised in prediabetes?",
+        "answer": "≥150 minutes"
+      }
     },
     {
       "id": "dup-rule-of-15",
       "kind": "duplicate",
       "fact": "#91: rule of 15 (15 g fast carbohydrate, recheck after 15 minutes)",
-      "first": { "type": "saq", "stem": "Describe the rule of 15 for treating hypoglycaemia." },
-      "second": { "type": "saq", "stem": "Explain how the 'rule of 15' is used to treat hypoglycaemia." }
+      "first": {
+        "type": "saq",
+        "stem": "Describe the rule of 15 for treating hypoglycaemia.",
+        "answer": "Give 15 g of fast-acting carbohydrate, recheck glucose after 15 minutes, and repeat if it is still below 70 mg/dL."
+      },
+      "second": {
+        "type": "saq",
+        "stem": "Explain how the 'rule of 15' is used to treat hypoglycaemia.",
+        "answer": "Take 15 g of fast-acting carbohydrate and recheck blood glucose 15 minutes later; repeat until glucose is above 70 mg/dL."
+      }
     },
     {
       "id": "dup-ada-a1c",
       "kind": "duplicate",
       "fact": "#43: ADA A1c goal <7% for most non-pregnant adults",
-      "first": { "type": "mcq", "stem": "What A1c goal does the ADA recommend for most non-pregnant adults with diabetes?" },
-      "second": { "type": "mcq", "stem": "For most adults with diabetes who are not pregnant, what is the ADA's A1c target?" }
+      "first": {
+        "type": "mcq",
+        "stem": "What A1c goal does the ADA recommend for most non-pregnant adults with diabetes?",
+        "answer": "<7%"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "For most adults with diabetes who are not pregnant, what is the ADA's A1c target?",
+        "answer": "Below 7%"
+      }
     },
     {
       "id": "distinct-ci-vs-cf",
       "kind": "distinct",
       "fact": "#41 C:I ratio = 500/TDD vs #42 correction factor = 1650/TDD",
-      "first": { "type": "mcq", "stem": "How is the carbohydrate-to-insulin ratio estimated from the total daily insulin dose?" },
-      "second": { "type": "mcq", "stem": "How is the insulin correction factor estimated from the total daily insulin dose?" }
+      "first": {
+        "type": "mcq",
+        "stem": "How is the carbohydrate-to-insulin ratio estimated from the total daily insulin dose?",
+        "answer": "500/TDD"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "How is the insulin correction factor estimated from the total daily insulin dose?",
+        "answer": "1650/TDD"
+      }
     },
     {
       "id": "distinct-hypo-level1-vs-level2",
       "kind": "distinct",
       "fact": "#90: level 1 (<70 and >=54 mg/dL) vs level 2 (<54 mg/dL)",
-      "first": { "type": "mcq", "stem": "Which blood glucose range defines level 1 hypoglycaemia?" },
-      "second": { "type": "mcq", "stem": "Which blood glucose value defines level 3 hypoglycaemia?" }
+      "first": {
+        "type": "mcq",
+        "stem": "Which blood glucose range defines level 1 hypoglycaemia?",
+        "answer": "<70 mg/dL and ≥54 mg/dL"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "Which blood glucose value defines level 2 hypoglycaemia?",
+        "answer": "<54 mg/dL"
+      }
     },
     {
       "id": "distinct-hypo-levels-saq-vs-mcq",
       "kind": "distinct",
       "fact": "#90: all three levels (SAQ) vs the level 2 threshold alone (MCQ)",
-      "first": { "type": "saq", "stem": "Describe the three levels of hypoglycaemia and how each is defined." },
-      "second": { "type": "mcq", "stem": "Below which glucose value does level 2 hypoglycaemia begin?" }
+      "first": {
+        "type": "saq",
+        "stem": "Describe the three levels of hypoglycaemia and how each is defined.",
+        "answer": "Level 1: glucose <70 and ≥54 mg/dL. Level 2: glucose <54 mg/dL. Level 3: a severe event with altered mental or physical state needing help from another person."
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "Below which glucose value does level 2 hypoglycaemia begin?",
+        "answer": "54 mg/dL"
+      }
     },
     {
       "id": "distinct-gdm-timing-vs-test",
       "kind": "distinct",
       "fact": "#61: when to screen after GDM vs which test to use",
-      "first": { "type": "mcq", "stem": "When should women with gestational diabetes be screened for type 2 diabetes after delivery?" },
-      "second": { "type": "mcq", "stem": "Which test should be used to screen women with gestational diabetes for type 2 diabetes after delivery?" }
+      "first": {
+        "type": "mcq",
+        "stem": "When should women with gestational diabetes be screened for type 2 diabetes after delivery?",
+        "answer": "At 6 weeks postpartum"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "Which test should be used to screen women with gestational diabetes for type 2 diabetes after delivery?",
+        "answer": "A 75 g oral glucose tolerance test"
+      }
     },
     {
       "id": "distinct-sglt2i-hf-vs-ckd",
       "kind": "distinct",
       "fact": "#38-39: SGLT2i in heart failure vs in chronic kidney disease",
-      "first": { "type": "mcq", "stem": "Which drug class reduces hospitalisation for heart failure in people with type 2 diabetes?" },
-      "second": { "type": "mcq", "stem": "Which drug class slows the progression of chronic kidney disease in people with type 2 diabetes?" }
+      "first": {
+        "type": "mcq",
+        "stem": "Which drug class reduces hospitalisation for heart failure in people with type 2 diabetes?",
+        "answer": "SGLT2 inhibitors"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "Which drug class slows the progression of chronic kidney disease in people with type 2 diabetes?",
+        "answer": "SGLT2 inhibitors"
+      }
     },
     {
       "id": "distinct-metformin-gi-vs-b12",
       "kind": "distinct",
       "fact": "#36: metformin GI side effects vs vitamin B12 deficiency",
-      "first": { "type": "mcq", "stem": "Which side effect of metformin is reduced by slow dose titration?" },
-      "second": { "type": "mcq", "stem": "Which vitamin deficiency is linked to long-term metformin use?" }
+      "first": {
+        "type": "mcq",
+        "stem": "Which side effect of metformin is reduced by slow dose titration?",
+        "answer": "Gastrointestinal upset"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "Which vitamin deficiency is linked to long-term metformin use?",
+        "answer": "Vitamin B12 deficiency"
+      }
     },
     {
       "id": "distinct-prediabetes-weight-vs-activity",
       "kind": "distinct",
       "fact": "#54: >=7% weight loss vs >=150 min/week activity",
-      "first": { "type": "mcq", "stem": "How much weight loss is advised for people with prediabetes?" },
-      "second": { "type": "mcq", "stem": "How much physical activity per week is advised for people with prediabetes?" }
+      "first": {
+        "type": "mcq",
+        "stem": "How much weight loss is advised for people with prediabetes?",
+        "answer": "At least 7% of body weight"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "How much physical activity per week is advised for people with prediabetes?",
+        "answer": "At least 150 minutes per week"
+      }
     },
     {
       "id": "distinct-tzd-vs-saxagliptin-hf",
       "kind": "distinct",
       "fact": "#39: why TZDs vs why saxagliptin are avoided in heart failure",
-      "first": { "type": "mcq", "stem": "Why should thiazolidinediones be avoided in patients with heart failure?" },
-      "second": { "type": "mcq", "stem": "Why should saxagliptin be avoided in patients with heart failure?" }
+      "first": {
+        "type": "mcq",
+        "stem": "Why should thiazolidinediones be avoided in patients with heart failure?",
+        "answer": "They cause fluid retention, which can worsen heart failure"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "Why should saxagliptin be avoided in patients with heart failure?",
+        "answer": "It increased hospitalisation for heart failure"
+      }
     },
     {
       "id": "distinct-ada-vs-aace-a1c",
       "kind": "distinct",
       "fact": "#43: ADA goal <7% vs AACE goal <=6.5%",
-      "first": { "type": "mcq", "stem": "What A1c goal does the ADA recommend for most adults with diabetes?" },
-      "second": { "type": "mcq", "stem": "What A1c goal does the AACE recommend for most adults with diabetes?" }
+      "first": {
+        "type": "mcq",
+        "stem": "What A1c goal does the ADA recommend for most adults with diabetes?",
+        "answer": "<7%"
+      },
+      "second": {
+        "type": "mcq",
+        "stem": "What A1c goal does the AACE recommend for most adults with diabetes?",
+        "answer": "≤6.5%"
+      }
     },
     {
       "id": "distinct-basal-vs-bolus",
       "kind": "distinct",
       "fact": "#31: role of basal vs bolus insulin",
-      "first": { "type": "saq", "stem": "Explain the role of basal insulin in a basal-bolus regimen." },
-      "second": { "type": "saq", "stem": "Explain the role of bolus insulin in a basal-bolus regimen." }
+      "first": {
+        "type": "saq",
+        "stem": "Explain the role of basal insulin in a basal-bolus regimen.",
+        "answer": "Basal insulin covers the body's background insulin needs between meals and overnight, keeping fasting glucose in range."
+      },
+      "second": {
+        "type": "saq",
+        "stem": "Explain the role of bolus insulin in a basal-bolus regimen.",
+        "answer": "Bolus insulin covers the rise in glucose after meals and corrects high readings, dosed by carbohydrate intake."
+      }
     }
   ]
 }

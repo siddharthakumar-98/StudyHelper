@@ -1,13 +1,14 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createJob, runJobStep } from "@/modules/jobs/engine";
 import type { JobSnapshot, StepDeps } from "@/modules/jobs/engine";
 import { JOB_HANDLERS } from "@/modules/jobs/registry";
+import { VERIFY_START_WINDOW_MS } from "@/modules/generation/handlers";
 import { MemoryJobStore } from "@/modules/jobs/store";
 import type { AiCallInput } from "@/modules/ai/client";
 import { AiTruncatedError } from "@/modules/ai/errors";
 import { createFakeAiClient, DEFAULT_FAKE_RESPONDERS, type FakeResponders } from "@/modules/ai/fake";
-import { processDraftQuestion } from "@/modules/generation/verify";
+import { processDraftQuestion, SIMILAR_STEM_THRESHOLD } from "@/modules/generation/verify";
 import { createUploadRecords } from "@/modules/ingestion/uploadService";
 import { pagePath } from "@/modules/ingestion/paths";
 import type { Database, Json } from "@/lib/supabase/database.types";
@@ -130,7 +131,7 @@ type Fixture = Awaited<ReturnType<typeof fixtureRun>>;
 /** Saves one draft MCQ per stem in the run, in order (separate batches keep created_at ordered). */
 async function saveDrafts(
   f: Fixture,
-  drafts: { stem: string; reviewNotes?: string[]; conflictNote?: string | null }[],
+  drafts: { stem: string; reviewNotes?: string[]; conflictNote?: string | null; answer?: string }[],
 ) {
   for (const [i, draft] of drafts.entries()) {
     const item: Record<string, Json> = {
@@ -138,7 +139,7 @@ async function saveDrafts(
       difficulty: "easy",
       stem: draft.stem,
       options: [
-        { id: "a", text: "500/TDD" },
+        { id: "a", text: draft.answer ?? "500/TDD" },
         { id: "b", text: "1650/TDD" },
         { id: "c", text: "1800/TDD" },
         { id: "d", text: "300/TDD" },
@@ -203,11 +204,21 @@ function recordingDeps(overrides: FakeResponders = {}) {
   return { calls, deps: { ai, db } satisfies StepDeps };
 }
 
-/** Inserts a question directly, with one version per stem (the last is current). */
-async function insertQuestion(topicId: string, status: Status, stems: string[]): Promise<string> {
+/**
+ * Inserts a question directly, with one version per stem (the last is current).
+ * Each version's answer is `answer` plus its version number: an MCQ's correct
+ * option text, or an SAQ's model answer.
+ */
+async function insertQuestion(
+  topicId: string,
+  status: Status,
+  stems: string[],
+  type: "mcq" | "saq" = "mcq",
+  answer = "500/TDD",
+): Promise<string> {
   const { data: q, error } = await service
     .from("questions")
-    .insert({ type: "mcq", status, topic_id: topicId, difficulty: "easy", current_version: stems.length })
+    .insert({ type, status, topic_id: topicId, difficulty: "easy", current_version: stems.length })
     .select("id")
     .single();
   expect(error).toBeNull();
@@ -216,11 +227,21 @@ async function insertQuestion(topicId: string, status: Status, stems: string[]):
       question_id: q!.id,
       version: i + 1,
       stem,
+      options: type === "mcq" ? [{ id: "a", text: "wrong" }, { id: "b", text: `${answer} v${i + 1}` }] : null,
       source_refs: [],
       basis_quote: "quote",
     })),
   );
   expect(versionError).toBeNull();
+  const { error: keyError } = await service.from("answer_keys").insert(
+    stems.map((_, i) => ({
+      question_id: q!.id,
+      version: i + 1,
+      correct_option_id: type === "mcq" ? "b" : null,
+      model_answer: type === "saq" ? `${answer} v${i + 1}` : null,
+    })),
+  );
+  expect(keyError).toBeNull();
   return q!.id as string;
 }
 
@@ -232,7 +253,7 @@ describe("find_similar_stems", () => {
     const topicId = topic!.id as string;
     const stem = "Which formula estimates the carbohydrate to insulin ratio?";
     const active = await insertQuestion(topicId, "active", [stem]);
-    const review = await insertQuestion(topicId, "needs_review", [`${stem} Explain.`]);
+    const review = await insertQuestion(topicId, "needs_review", [`${stem} Explain.`], "saq", "Divide 500 by TDD");
     const flagged = await insertQuestion(topicId, "flagged", [stem.replace("carbohydrate", "carb")]);
     await insertQuestion(topicId, "retired", [stem]);
     await insertQuestion(topicId, "draft", [stem]);
@@ -241,14 +262,24 @@ describe("find_similar_stems", () => {
     await insertQuestion(topicId, "active", [stem, "Name two adverse effects of sulfonylureas."]);
     await insertQuestion(topicId, "active", ["Name two adverse effects of DPP-4 inhibitors."]);
 
-    const { data, error } = await db.rpc("find_similar_stems", { p_stem: stem, p_exclude_question: self });
+    const { data, error } = await db.rpc("find_similar_stems", {
+      p_stem: stem,
+      p_exclude_question: self,
+      p_threshold: SIMILAR_STEM_THRESHOLD,
+    });
     expect(error).toBeNull();
     expect(data!.map((r) => r.question_id)).toEqual(expect.arrayContaining([active, review, flagged]));
     expect(data).toHaveLength(3);
-    expect(data![0]).toEqual({ question_id: active, stem, sim: 1 });
+    // Type and answer come from the current version's answer key.
+    expect(data![0]).toEqual({ question_id: active, type: "mcq", stem, answer: "500/TDD v1", sim: 1 });
+    expect(data!.find((r) => r.question_id === review)).toMatchObject({ type: "saq", answer: "Divide 500 by TDD v1" });
     const sims = data!.map((r) => r.sim);
     expect([...sims].sort((a, b) => b - a)).toEqual(sims);
-    expect(Math.min(...sims)).toBeGreaterThanOrEqual(0.45);
+    expect(Math.min(...sims)).toBeGreaterThanOrEqual(SIMILAR_STEM_THRESHOLD);
+
+    // The default threshold is the app's.
+    const { data: byDefault } = await db.rpc("find_similar_stems", { p_stem: stem, p_exclude_question: self });
+    expect(byDefault).toEqual(data);
   });
 
   it("returns at most 5", async () => {
@@ -258,6 +289,7 @@ describe("find_similar_stems", () => {
     const { data } = await db.rpc("find_similar_stems", {
       p_stem: stem,
       p_exclude_question: "00000000-0000-4000-8000-000000000000",
+      p_threshold: SIMILAR_STEM_THRESHOLD,
     });
     expect(data).toHaveLength(5);
   });
@@ -265,6 +297,9 @@ describe("find_similar_stems", () => {
 
 describe("verify stage", () => {
   beforeEach(resetDb);
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it("checks 7 drafts in two steps (5 + 2), then completes the run and marks the document ready", async () => {
     const f = await fixtureRun();
@@ -278,15 +313,50 @@ describe("verify stage", () => {
     ]);
     expect(snapshots.at(-1)!.nextJobId).toBeNull();
     expect((await questionsOfRun(f.runId)).map((q) => q.status)).toEqual(Array(7).fill("active"));
-    // Distinct facts: no near stems, so no dedup call; one verifier call each.
-    expect(calls.map((c) => c.task)).toEqual(Array(7).fill("verify"));
+    // One verifier call each (some stems may also be dedup candidates; the fake says "not a duplicate").
+    const verifyCalls = calls.filter((c) => c.task === "verify");
+    expect(verifyCalls).toHaveLength(7);
     // The slide has a table: its page is attached for the verifier.
-    expect(calls[0].content.filter((b) => b.type === "document")).toHaveLength(1);
+    expect(verifyCalls[0].content.filter((b) => b.type === "document")).toHaveLength(1);
 
     const { data: run } = await db.from("generation_runs").select("completed_at").eq("id", f.runId).single();
     expect(run!.completed_at).not.toBeNull();
     const { data: doc } = await db.from("documents").select("status").eq("id", f.documentId).single();
     expect(doc!.status).toBe("ready");
+  });
+
+  it("starts no new draft once the step has run for the start window", async () => {
+    const f = await fixtureRun();
+    await saveDrafts(f, STEMS.slice(0, 3).map((stem) => ({ stem })));
+    // Each verifier call takes the whole window: one question per step.
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+    const { deps } = recordingDeps({
+      verify: (input) => {
+        offset += VERIFY_START_WINDOW_MS;
+        return DEFAULT_FAKE_RESPONDERS.verify!(input);
+      },
+    });
+    const snapshots = await verify(f, deps);
+    expect(snapshots.map((s) => [s.status, s.progress?.label])).toEqual([
+      ["pending", "Checking questions (1 of 3)"],
+      ["pending", "Checking questions (2 of 3)"],
+      ["done", "Checking questions (3 of 3)"],
+    ]);
+  });
+
+  it("asks the model, not the auto rule, about identical generic stems with different answers", async () => {
+    const f = await fixtureRun();
+    const stem = "Which statement about SGLT2 inhibitors is correct?";
+    await saveDrafts(f, [
+      { stem, answer: "They reduce hospitalisation for heart failure" },
+      { stem, answer: "They slow the progression of chronic kidney disease" },
+    ]);
+    const { calls, deps } = recordingDeps();
+    await verify(f, deps);
+    expect(calls.filter((c) => c.task === "dedup")).toHaveLength(1);
+    expect((await questionsOfRun(f.runId)).map((q) => q.status)).toEqual(["active", "active"]);
   });
 
   it("follows the fake verifier: a FAIL stem goes to needs_review with notes", async () => {
@@ -374,7 +444,7 @@ describe("verify stage", () => {
       expect(aByStem.has(q.version.stem)).toBe(true);
       expect(q.status).toBe("retired");
       expect(q.version.review_notes).toEqual([
-        `Duplicate of ${aByStem.get(q.version.stem)}: Nearly identical wording (similarity 1.00)`,
+        `Duplicate of ${aByStem.get(q.version.stem)}: Same type and answer, nearly identical wording (similarity 1.00)`,
       ]);
     }
 

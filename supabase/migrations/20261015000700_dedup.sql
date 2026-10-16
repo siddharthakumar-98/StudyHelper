@@ -12,28 +12,50 @@ create index question_versions_stem_trgm_idx
 -- similarity >= p_threshold), most similar first. Only questions a student could
 -- meet or an admin is reviewing count: status active, needs_review or flagged
 -- (never draft or retired), and only their current version. p_exclude_question
--- (nullable) leaves the question being checked out. Service role only.
+-- (nullable) leaves the question being checked out. Each row carries the
+-- question's type and answer (an MCQ's correct option text, an SAQ's model
+-- answer, from the version's answer key) so dedup can tell apart questions with
+-- similar stems that test different facts. The app passes its own threshold
+-- (SIMILAR_STEM_THRESHOLD); the default matches it. Service role only.
 create or replace function public.find_similar_stems(
   p_stem text,
   p_exclude_question uuid,
-  p_threshold real default 0.45
+  p_threshold real default 0.3
 )
-returns table (question_id uuid, stem text, sim real)
+returns table (question_id uuid, type text, stem text, answer text, sim real)
 language sql
 set search_path = public
 as $$
   -- Lets the "%" operator (and so the GIN index) pre-filter at the same threshold.
   select set_config('pg_trgm.similarity_threshold', p_threshold::text, true);
 
-  select q.id, v.stem, extensions.similarity(v.stem, p_stem)
+  select
+    q.id,
+    q.type::text,
+    v.stem,
+    coalesce(
+      case
+        when q.type = 'mcq' then (
+          select o ->> 'text'
+          from jsonb_array_elements(coalesce(v.options, '[]'::jsonb)) as o
+          where o ->> 'id' = k.correct_option_id
+          limit 1
+        )
+        else k.model_answer
+      end,
+      ''
+    ),
+    extensions.similarity(v.stem, p_stem)
   from public.questions q
   join public.question_versions v
     on v.question_id = q.id and v.version = q.current_version
+  left join public.answer_keys k
+    on k.question_id = v.question_id and k.version = v.version
   where q.status in ('active', 'needs_review', 'flagged')
     and (p_exclude_question is null or q.id <> p_exclude_question)
     and v.stem operator(extensions.%) p_stem
     and extensions.similarity(v.stem, p_stem) >= p_threshold
-  order by 3 desc, q.id
+  order by 5 desc, q.id
   limit 5;
 $$;
 revoke execute on function public.find_similar_stems(text, uuid, real) from public, anon, authenticated;

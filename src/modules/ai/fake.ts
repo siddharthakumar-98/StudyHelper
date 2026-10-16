@@ -43,9 +43,10 @@ const topicMapResponder: FakeResponder = (input) => {
 /**
  * Eight made-up five-letter words for one question of one batch (MCQ or SAQ),
  * drawn from a fixed pseudo-random sequence per (batch, type). Stems of different
- * batches and types then share almost no trigrams beyond their common prefix
- * (similarity about 0.3, under the 0.45 candidate threshold), so they never look
- * like duplicates of each other.
+ * batches and types then share almost no trigrams beyond their common prefix, so
+ * they stay far below the auto-duplicate threshold. They can still be dedup
+ * candidates (the shared prefix alone can reach SIMILAR_STEM_THRESHOLD); the
+ * fake dedup then answers "not a duplicate".
  */
 function stemWords(batchIndex: number, kind: "mcq" | "saq"): string {
   let seed = (batchIndex * 2 + (kind === "saq" ? 1 : 0) + 1) >>> 0;

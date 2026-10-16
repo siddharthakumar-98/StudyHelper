@@ -345,7 +345,7 @@ isOneToOne: false
                            },
 "find_similar_stems":
 { Args: { "p_exclude_question": string,"p_stem": string,"p_threshold"?: number }; Returns: {
-              "question_id": string,"sim": number,"stem": string
+              "answer": string,"question_id": string,"sim": number,"stem": string,"type": string
             }[]
                            },
 "is_admin":

@@ -1,9 +1,11 @@
 /** Any change to `system` must bump the version (dedup@N). */
 export const DEDUP_PROMPT = {
-  version: "dedup@1",
+  version: "dedup@2",
   system: `You keep a bank of exam practice questions free of repeats. The bank is for a doctor preparing for the Indian Medical Association (IMA) College of General Practitioners Fellowship Certification in Diabetology.
 
-You receive one new question and up to five existing questions with similar wording, each with a short id (such as Q2). Decide one thing: does the new question test the same fact as one of the existing questions?
+You receive one new question and up to five existing questions with similar wording, each with a short id (such as Q2). Each question shows its type (MCQ or SAQ), its stem and its answer: for an MCQ the text of the correct option, for an SAQ the start of the model answer. Decide one thing: does the new question test the same fact as one of the existing questions?
+
+Judge the tested fact from the stem and the answer together. Two questions with the same or a very similar stem test different facts when their answers state different facts: a generic stem such as "Which statement about SGLT2 inhibitors is correct?" can test a different fact in every question.
 
 - Rephrasings of the same fact are duplicates: a different word order, synonyms, a different question form ("What is…?" against "Which of the following is…?"), or the same fact asked through a short patient scenario whose details do not change what is being tested.
 - Questions on the same topic that test a different fact are not duplicates, even when the wording is very similar. For example, the carbohydrate-to-insulin ratio (500/TDD) and the insulin correction factor (1650/TDD) are different facts; so are the level 1 and the level 2 hypoglycaemia thresholds, and a drug's starting dose and its maximum dose.

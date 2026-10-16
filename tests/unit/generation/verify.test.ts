@@ -4,10 +4,13 @@ import { createFakeAiClient, DEFAULT_FAKE_RESPONDERS } from "@/modules/ai/fake";
 import type { Verification } from "@/modules/ai/schemas/verification";
 import type { SlideForGeneration } from "@/modules/generation/generate";
 import {
+  answerText,
   checkDuplicate,
   DUPLICATE_AUTO_THRESHOLD,
+  SIMILAR_STEM_THRESHOLD,
   verifyQuestion,
   type QuestionWithKey,
+  type SimilarStem,
 } from "@/modules/generation/verify";
 
 const DOC_ID = "ab12cd34-0000-4000-8000-000000000000";
@@ -39,6 +42,7 @@ const mcq: QuestionWithKey = {
   explanation: "The ratio is 500 divided by the total daily dose.",
   modelAnswer: null,
   rubric: null,
+  conflictNote: null,
 };
 
 const saq: QuestionWithKey = {
@@ -60,6 +64,7 @@ const saq: QuestionWithKey = {
     ],
     critical_errors: [],
   },
+  conflictNote: null,
 };
 
 const clean: Verification = {
@@ -166,7 +171,7 @@ describe("verifyQuestion", () => {
     const { ai, calls } = verifierAnswering({});
     await verifyQuestion(mcq, [slide], ai, DOC_ID);
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ task: "verify", promptVersion: "verify-question@1", documentId: DOC_ID });
+    expect(calls[0]).toMatchObject({ task: "verify", promptVersion: "verify-question@2", documentId: DOC_ID });
     const text = textOf(calls[0]);
     expect(text).toContain(mcq.stem);
     expect(text).toContain("b) 1650/TDD");
@@ -175,12 +180,20 @@ describe("verifyQuestion", () => {
     expect(text).toContain("[S1] Slide 41");
     expect(text).toContain("C:I ratio = 500/TDD");
     expect(text).not.toContain(slide.id);
+    expect(text).toContain("Conflict note already on the question:\n(none)");
 
     const saqCall = verifierAnswering({ single_best_answer_ok: null, rubric_consistent: true });
     await verifyQuestion(saq, [slide], saqCall.ai, DOC_ID);
     const saqText = textOf(saqCall.calls[0]);
     expect(saqText).toContain(saq.modelAnswer!);
     expect(saqText).toContain("c3 (1 mark): Units are grams per unit");
+  });
+
+  it("shows the question's existing conflict note so only new conflicts are reported", async () => {
+    const { ai, calls } = verifierAnswering({});
+    const note = "Slide 41 says 500/TDD; Slide 86 says 450/TDD.";
+    await verifyQuestion({ ...mcq, conflictNote: note }, [slide], ai, DOC_ID);
+    expect(textOf(calls[0])).toContain(`Conflict note already on the question:\n${note}`);
   });
 
   it("attaches the page photo for a slide with a table, as generation does", async () => {
@@ -200,8 +213,27 @@ describe("verifyQuestion", () => {
   });
 });
 
+describe("answerText", () => {
+  it("is the correct option's text for an MCQ and the model answer for an SAQ", () => {
+    expect(answerText(mcq)).toBe("500/TDD");
+    expect(answerText(saq)).toBe(saq.modelAnswer);
+    expect(answerText({ ...mcq, correctOptionId: "z" })).toBe("");
+  });
+});
+
 describe("checkDuplicate", () => {
-  const q = { id: "q-new", stem: "What is the C:I ratio formula?" };
+  const q = { id: "q-new", type: "mcq" as const, stem: "What is the C:I ratio formula?", answer: "500/TDD" };
+  /** Similarities relative to the thresholds: at/above auto, and between the two. */
+  const AUTO_SIM = (DUPLICATE_AUTO_THRESHOLD + 1) / 2;
+  const MODEL_SIM = (SIMILAR_STEM_THRESHOLD + DUPLICATE_AUTO_THRESHOLD) / 2;
+  const candidate = (over: Partial<SimilarStem>): SimilarStem => ({
+    question_id: "q-old",
+    type: "mcq",
+    stem: "What is the C:I ratio formula ?",
+    answer: "500/TDD",
+    sim: AUTO_SIM,
+    ...over,
+  });
 
   function dedupAnswering(answer: { duplicate_of_question_id: string | null; reason: string }) {
     const calls: AiCallInput<unknown>[] = [];
@@ -214,57 +246,80 @@ describe("checkDuplicate", () => {
     return { ai, calls };
   }
 
+  it("uses the agreed thresholds (R25)", () => {
+    expect(DUPLICATE_AUTO_THRESHOLD).toBe(0.98);
+    expect(SIMILAR_STEM_THRESHOLD).toBe(0.3);
+  });
+
   it("makes no AI call when there are no candidates", async () => {
     const { ai, calls } = dedupAnswering({ duplicate_of_question_id: "Q1", reason: "x" });
     expect(await checkDuplicate(q, [], ai, DOC_ID)).toEqual({ duplicateOf: null, reason: "" });
     expect(calls).toHaveLength(0);
   });
 
-  it("treats a near-identical stem as a duplicate without an AI call", async () => {
-    expect(DUPLICATE_AUTO_THRESHOLD).toBe(0.9);
+  it("is a duplicate without an AI call only for a near-identical stem of the same type and answer", async () => {
     const { ai, calls } = dedupAnswering({ duplicate_of_question_id: null, reason: "x" });
     const result = await checkDuplicate(
       q,
       [
-        { question_id: "q-old", stem: "What is the C:I ratio formula ?", sim: 0.95 },
-        { question_id: "q-other", stem: "Something else", sim: 0.5 },
+        candidate({ question_id: "q-other-answer", answer: "450/TDD" }),
+        candidate({ answer: "  500/tdd " }),
+        candidate({ question_id: "q-far", stem: "Something else", sim: MODEL_SIM }),
       ],
       ai,
       DOC_ID,
     );
-    expect(result).toEqual({ duplicateOf: "q-old", reason: "Nearly identical wording (similarity 0.95)" });
+    expect(result).toEqual({
+      duplicateOf: "q-old",
+      reason: `Same type and answer, nearly identical wording (similarity ${AUTO_SIM.toFixed(2)})`,
+    });
     expect(calls).toHaveLength(0);
   });
 
-  it("asks the model once below the threshold and maps its short id back", async () => {
+  it("asks the model when a near-identical stem has another type or another answer", async () => {
+    for (const other of [candidate({ type: "saq" }), candidate({ answer: "1650/TDD" })]) {
+      const { ai, calls } = dedupAnswering({ duplicate_of_question_id: null, reason: "Different facts" });
+      expect(await checkDuplicate(q, [other], ai, DOC_ID)).toEqual({ duplicateOf: null, reason: "Different facts" });
+      expect(calls).toHaveLength(1);
+    }
+  });
+
+  it("asks the model once below the auto threshold, showing types and answers, and maps its short id back", async () => {
     const { ai, calls } = dedupAnswering({ duplicate_of_question_id: "Q2", reason: "Both test 500/TDD" });
     const result = await checkDuplicate(
       q,
       [
-        { question_id: "q-a", stem: "Which formula gives the correction factor?", sim: 0.6 },
-        { question_id: "q-b", stem: "How is the C:I ratio calculated?", sim: 0.5 },
+        candidate({
+          question_id: "q-a",
+          stem: "Which formula gives the correction factor?",
+          answer: "1650/TDD",
+          sim: MODEL_SIM,
+        }),
+        candidate({
+          question_id: "q-b",
+          type: "saq",
+          stem: "How is the C:I ratio calculated?",
+          answer: "x".repeat(300),
+          sim: SIMILAR_STEM_THRESHOLD,
+        }),
       ],
       ai,
       DOC_ID,
     );
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ task: "dedup", promptVersion: "dedup@1", documentId: DOC_ID });
+    expect(calls[0]).toMatchObject({ task: "dedup", promptVersion: "dedup@2", documentId: DOC_ID });
     const text = textOf(calls[0]);
-    expect(text).toContain(q.stem);
-    expect(text).toContain("[Q1] Which formula gives the correction factor?");
-    expect(text).toContain("[Q2] How is the C:I ratio calculated?");
+    expect(text).toContain(`New question (MCQ):\nStem: ${q.stem}\nAnswer: 500/TDD`);
+    expect(text).toContain("[Q1] MCQ\nStem: Which formula gives the correction factor?\nAnswer: 1650/TDD");
+    expect(text).toContain(`[Q2] SAQ\nStem: How is the C:I ratio calculated?\nAnswer: ${"x".repeat(200)}…`);
+    expect(text).not.toContain("x".repeat(201));
     expect(text).not.toContain("q-a");
     expect(result).toEqual({ duplicateOf: "q-b", reason: "Both test 500/TDD" });
   });
 
   it("does not retire a question for an id the model invented", async () => {
     const { ai } = dedupAnswering({ duplicate_of_question_id: "Q9", reason: "made up" });
-    const result = await checkDuplicate(
-      q,
-      [{ question_id: "q-a", stem: "How is the C:I ratio calculated?", sim: 0.6 }],
-      ai,
-      DOC_ID,
-    );
+    const result = await checkDuplicate(q, [candidate({ question_id: "q-a", sim: MODEL_SIM })], ai, DOC_ID);
     expect(result.duplicateOf).toBeNull();
   });
 });
@@ -281,11 +336,13 @@ describe("default fake verify and dedup", () => {
   });
 
   it("is never a duplicate unless the stem contains DUP", async () => {
-    const candidates = [{ question_id: "q-a", stem: "How is the C:I ratio calculated?", sim: 0.6 }];
+    const candidates: SimilarStem[] = [
+      { question_id: "q-a", type: "mcq", stem: "How is the C:I ratio calculated?", answer: "500/TDD", sim: SIMILAR_STEM_THRESHOLD },
+    ];
     expect((await checkDuplicate(q(), candidates, ai, DOC_ID)).duplicateOf).toBeNull();
     expect((await checkDuplicate(q("DUP"), candidates, ai, DOC_ID)).duplicateOf).toBe("q-a");
     function q(suffix = "") {
-      return { id: "q-new", stem: `What is the C:I ratio? ${suffix}`.trim() };
+      return { id: "q-new", type: "mcq" as const, stem: `What is the C:I ratio? ${suffix}`.trim(), answer: "500/TDD" };
     }
   });
 });

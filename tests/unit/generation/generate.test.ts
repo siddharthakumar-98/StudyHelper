@@ -101,7 +101,7 @@ describe("planTopicBatches", () => {
 
 describe("GENERATE_QUESTIONS_PROMPT", () => {
   it("is versioned and carries the core rules", () => {
-    expect(GENERATE_QUESTIONS_PROMPT.version).toBe("generate-questions@2");
+    expect(GENERATE_QUESTIONS_PROMPT.version).toBe("generate-questions@3");
     const system = GENERATE_QUESTIONS_PROMPT.system;
     for (const rule of [
       "Fellowship Certification in Diabetology",
@@ -126,6 +126,8 @@ describe("GENERATE_QUESTIONS_PROMPT", () => {
       // Self-contained stems and scenarios that add no new facts.
       "Never refer to \"the slide\"",
       "Never introduce clinical facts, drug doses, thresholds",
+      // Stems name the fact they test, so dedup can tell questions apart.
+      "Never write a generic stem",
     ]) {
       expect(system).toContain(rule);
     }
@@ -146,7 +148,7 @@ describe("generateForTopic", () => {
     expect(calls).toHaveLength(1);
     const [call] = calls;
     expect(call.task).toBe("generate");
-    expect(call.promptVersion).toBe("generate-questions@2");
+    expect(call.promptVersion).toBe("generate-questions@3");
     expect(call.system).toBe(GENERATE_QUESTIONS_PROMPT.system);
     expect(call.documentId).toBe(DOC_ID);
     const text = textOf(call);
