@@ -66,22 +66,22 @@ const generateResponder: FakeResponder = (input) => {
   return {
     mcqs: [
       {
-        stem: `${prefix} MCQ: which statement is made on the slide?`,
+        stem: `${prefix} MCQ: which statement about this topic is correct?`,
         options: [
-          { id: "a", text: "The statement quoted on the slide" },
+          { id: "a", text: "The quoted statement" },
           { id: "b", text: "A dose twice as high" },
           { id: "c", text: "A dose half as high" },
           { id: "d", text: "A different drug" },
         ],
         correct_option_id: "a",
-        explanation: "The slide states it directly.",
+        explanation: "The course material states it directly.",
         difficulty: "easy",
         ...source,
       },
     ],
     saqs: [
       {
-        stem: `${prefix} SAQ: summarise what the slide teaches.`,
+        stem: `${prefix} SAQ: summarise the key points of this topic.`,
         model_answer: String(quote),
         key_concepts: [{ concept: String(quote), equivalents: [] }],
         rubric: {

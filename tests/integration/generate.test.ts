@@ -194,6 +194,11 @@ describe("generate stage", () => {
     expect(textOf(calls[0])).not.toContain("Text of slide 8");
     // Batch 1 is told to avoid the stems batch 0 just wrote.
     expect(textOf(calls[1])).toContain(questions[0].question_versions[0].stem);
+    // Each batch sees the topic's other readable slides as read-only context.
+    expect(textOf(calls[1])).toContain("(C1) Slide 1");
+    expect(textOf(calls[1])).toContain("(C6) Slide 6");
+    expect(textOf(calls[0])).toContain("(C1) Slide 7");
+    expect(textOf(calls[0])).not.toContain("Slide 8");
   });
 
   it("re-running a batch replaces its drafts instead of adding to them", async () => {
@@ -277,6 +282,34 @@ describe("generate stage", () => {
       `${other}:0`,
       `${other}:0`,
     ]);
+  });
+
+  it("the finishing step removes drafts of batches the plan lost mid-run", async () => {
+    const seven: Legibility[] = ["clear", "clear", "clear", "clear", "clear", "clear", "clear"];
+    const { documentId } = await fixtureDocument(seven);
+    const { store, generateJobId, runId } = await topicMap(documentId);
+    const fixture = await topicId("Fixture topic");
+
+    // Step 0 of 2 writes batch 0 of "Fixture topic".
+    const step0 = await runJobStep(store, JOB_HANDLERS, generateJobId, fakeDeps);
+    expect(step0).toMatchObject({ status: "pending", error: null });
+    expect((await questionsOf(runId)).map((q) => q.batch_key)).toEqual([`${fixture}:0`, `${fixture}:0`]);
+
+    // Mid-run, a topic-map pass moves the slides to another topic (same open run).
+    const ai = createFakeAiClient({
+      ...DEFAULT_FAKE_RESPONDERS,
+      topicMap: () => ({
+        topics: [{ name: "Other topic", slide_ids: ["S1", "S2", "S3", "S4", "S5", "S6", "S7"] }],
+        unassigned: [],
+      }),
+    });
+    expect((await topicMap(documentId, { ai, db })).runId).toBe(runId);
+
+    // The original job's last step writes batch 1 of the new plan and clears the stale batch.
+    const step1 = await runJobStep(store, JOB_HANDLERS, generateJobId, fakeDeps);
+    expect(step1).toMatchObject({ status: "done", error: null });
+    const other = await topicId("Other topic");
+    expect((await questionsOf(runId)).map((q) => q.batch_key)).toEqual([`${other}:1`, `${other}:1`]);
   });
 
   it("goes straight to verify when the handout has no topics", async () => {

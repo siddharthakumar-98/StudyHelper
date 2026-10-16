@@ -95,6 +95,8 @@ type PlanBatch = {
   batchIndex: number;
   batchKey: string;
   slides: PlanSlide[];
+  /** The topic's other readable slides, shown read-only so cross-batch contradictions are visible. */
+  otherSlides: PlanSlide[];
 };
 
 /**
@@ -149,6 +151,7 @@ async function loadGenerationPlan(db: Db, documentId: string): Promise<PlanBatch
         batchIndex,
         batchKey: `${topicId}:${batchIndex}`,
         slides,
+        otherSlides: ordered.filter((s) => !slides.includes(s)),
       }));
     });
 }
@@ -233,29 +236,34 @@ function toSaveItem(
   };
 }
 
+/** Deletes the run's drafts from batches that are not in the current plan. */
+async function deleteStaleDrafts(db: Db, runId: string, plan: PlanBatch[]): Promise<void> {
+  const { error } = await db.rpc("delete_stale_draft_batches", {
+    p_run_id: runId,
+    p_keep_batch_keys: plan.map((b) => b.batchKey),
+  });
+  if (error) throw new Error(`Could not clear earlier drafts: ${error.message}`);
+}
+
 /**
  * Step k writes the questions of batch k of the plan (loadGenerationPlan) and
  * saves them as drafts with their pre-check notes, replacing that batch's
- * earlier drafts in one transaction (save_generated_questions). Step 0 first
- * deletes the run's drafts from batches no longer in the plan, since a later
- * topic-map pass can reuse the run. The last step hands the run to verify.
+ * earlier drafts in one transaction (save_generated_questions). Step 0 first,
+ * and the finishing step again, delete the run's drafts from batches no longer
+ * in the plan: a later topic-map pass can reuse the run, and the plan can
+ * shrink mid-run. The last step hands the run to verify.
  */
 export const generateHandler: JobHandler = async ({ db, ai, documentId, step, payload }) => {
   const runId = payload.runId;
   if (typeof runId !== "string" || !runId) throw new Error("The generate job has no generation run");
 
   const plan = await loadGenerationPlan(db, documentId);
-  if (step === 0) {
-    const { error } = await db.rpc("delete_stale_draft_batches", {
-      p_run_id: runId,
-      p_keep_batch_keys: plan.map((b) => b.batchKey),
-    });
-    if (error) throw new Error(`Could not clear earlier drafts: ${error.message}`);
-  }
+  if (step === 0) await deleteStaleDrafts(db, runId, plan);
 
   const next = { kind: "verify" as const, payload: { runId } };
   const batch = plan[step];
   if (!batch) {
+    await deleteStaleDrafts(db, runId, plan);
     return {
       done: true,
       progress: {
@@ -277,6 +285,7 @@ export const generateHandler: JobHandler = async ({ db, ai, documentId, step, pa
       slides: batch.slides,
       pageDocs,
       avoidStems,
+      contextSlides: batch.otherSlides,
       ...targetsFor(batch.slides.length),
       batchIndex: batch.batchIndex,
     },
@@ -301,5 +310,6 @@ export const generateHandler: JobHandler = async ({ db, ai, documentId, step, pa
     label: `Writing questions: ${batch.topicName} (${step + 1} of ${plan.length})`,
   };
   if (step < plan.length - 1) return { done: false, progress };
+  await deleteStaleDrafts(db, runId, plan);
   return { done: true, progress, next };
 };

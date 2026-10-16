@@ -2,6 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { AiClient } from "@/modules/ai/client";
 import { GENERATE_QUESTIONS_PROMPT } from "@/modules/ai/prompts/generateQuestions";
 import { GenerationResultSchema, type GenerationResult } from "@/modules/ai/schemas/generation";
+import { slideExcerpt } from "./topicMap";
 
 export type SlideForGeneration = {
   id: string;
@@ -98,12 +99,20 @@ function slideBlock(slide: SlideForGeneration, alias: string): string {
   return lines.join("\n");
 }
 
+/** A read-only excerpt of a topic slide outside the batch, so cross-batch contradictions are visible. */
+function contextBlock(slide: SlideForGeneration, ref: string): string {
+  const excerpt = slideExcerpt(slide).replace(/\s*\n\s*/g, " / ");
+  return [`(${ref}) ${slide.label}`, `Title: ${slide.title ?? "(none)"}`, `Excerpt: ${excerpt || "(none)"}`].join("\n");
+}
+
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
  * Writes one batch of a topic's questions. The model sees short slide ids (S1,
  * S2, ...) instead of slide ids; they are mapped back here. An id the model
- * invents stays as it is, so validateGenerated reports it. Page photos are
+ * invents stays as it is, so validateGenerated reports it. The topic's other
+ * slides (contextSlides) are shown as read-only excerpts under refs C1, C2, ...
+ * that are never mapped back, so citing one is reported the same way. Page photos are
  * attached, one per page, for slides with tables or long diagram descriptions.
  * Questions beyond the maxima are dropped, never kept.
  */
@@ -114,6 +123,8 @@ export async function generateForTopic(
     /** Page bytes by page id; needed for the pages of slides that get a photo. */
     pageDocs: Map<string, Uint8Array>;
     avoidStems: string[];
+    /** The topic's other readable slides (not in this batch): shown for contradictions, never citable. */
+    contextSlides?: SlideForGeneration[];
     maxMcq: number;
     maxSaq: number;
     /** Not sent to the model; lets the fake AI label its questions. */
@@ -129,12 +140,21 @@ export async function generateForTopic(
   const avoid = input.avoidStems.length
     ? input.avoidStems.map((stem) => `- ${stem.replace(/\s+/g, " ").trim()}`).join("\n")
     : "(none)";
-  const text = [
+  const sections = [
     `Topic: ${input.topicName}`,
     `Write at most ${plural(input.maxMcq, "MCQ")} and at most ${plural(input.maxSaq, "SAQ")}. Fewer is fine.`,
     `avoid_stems:\n${avoid}`,
     `Slides:\n\n${input.slides.map((slide, i) => slideBlock(slide, aliases[i])).join("\n\n")}`,
-  ].join("\n\n");
+  ];
+  const context = input.contextSlides ?? [];
+  if (context.length > 0) {
+    sections.push(
+      `Other slides in this topic (context only, never cite or quote these):\n\n${context
+        .map((slide, i) => contextBlock(slide, `C${i + 1}`))
+        .join("\n\n")}`,
+    );
+  }
+  const text = sections.join("\n\n");
 
   const content: Anthropic.Beta.BetaContentBlockParam[] = [{ type: "text", text }];
   const photoAliases = new Map<string, string[]>();

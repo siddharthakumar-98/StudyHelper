@@ -98,7 +98,7 @@ describe("planTopicBatches", () => {
 
 describe("GENERATE_QUESTIONS_PROMPT", () => {
   it("is versioned and carries the core rules", () => {
-    expect(GENERATE_QUESTIONS_PROMPT.version).toBe("generate-questions@1");
+    expect(GENERATE_QUESTIONS_PROMPT.version).toBe("generate-questions@2");
     const system = GENERATE_QUESTIONS_PROMPT.system;
     for (const rule of [
       "Fellowship Certification in Diabetology",
@@ -115,6 +115,14 @@ describe("GENERATE_QUESTIONS_PROMPT", () => {
       "avoid_stems",
       "skipped_slides",
       "Never exceed",
+      // Every contradiction is surfaced: guidelines, other slides of the topic, a slide's own picture.
+      "You must write a \"conflict_note\"",
+      "Other slides in this topic",
+      "never cite them",
+      "its own table, diagram description or page photo",
+      // Self-contained stems and scenarios that add no new facts.
+      "Never refer to \"the slide\"",
+      "Never introduce clinical facts, drug doses, thresholds",
     ]) {
       expect(system).toContain(rule);
     }
@@ -135,7 +143,7 @@ describe("generateForTopic", () => {
     expect(calls).toHaveLength(1);
     const [call] = calls;
     expect(call.task).toBe("generate");
-    expect(call.promptVersion).toBe("generate-questions@1");
+    expect(call.promptVersion).toBe("generate-questions@2");
     expect(call.system).toBe(GENERATE_QUESTIONS_PROMPT.system);
     expect(call.documentId).toBe(DOC_ID);
     const text = textOf(call);
@@ -147,6 +155,45 @@ describe("generateForTopic", () => {
     expect(text).toContain("at most 1 SAQ");
     expect(text).toContain("What is the maximum dose of metformin?");
     expect(text).not.toContain("slide-1");
+    expect(text).not.toContain("Other slides in this topic");
+  });
+
+  it("shows the topic's other slides as a read-only block with non-citable refs", async () => {
+    const { ai, calls } = recordingAi();
+    const other = slide(86, {
+      title: "Insulin ratios",
+      verbatim_text: "C:I ratio = 450/TDD\nCorrection factor = 2000/TDD " + "x".repeat(400),
+    });
+    await generateForTopic(
+      { ...baseInput([slide(41)]), contextSlides: [other, slide(87, { verbatim_text: "" })] },
+      ai,
+      DOC_ID,
+    );
+    const text = textOf(calls[0]);
+    const block = text.slice(text.indexOf("Other slides in this topic (context only, never cite or quote these):"));
+    expect(block).not.toBe(text);
+    expect(block).toContain("(C1) Slide 86\nTitle: Insulin ratios\nExcerpt: C:I ratio = 450/TDD / Correction factor = 2000/TDD");
+    expect(block).toContain("(C2) Slide 87");
+    expect(block).not.toContain("x".repeat(300)); // excerpts stay short
+    expect(block).not.toContain("[S");
+    expect(text).not.toContain("slide-86");
+    expect(text.indexOf("[S1] Slide 41")).toBeLessThan(text.indexOf("(C1) Slide 86"));
+  });
+
+  it("a question citing a context-only slide fails the pre-check", async () => {
+    const { ai } = recordingAi(() => ({
+      mcqs: [mcqCiting(["C1"], "C:I ratio = 450/TDD")],
+      saqs: [],
+      skipped_slides: [],
+    }));
+    const batch = [slide(41)];
+    const other = slide(86, { verbatim_text: "C:I ratio = 450/TDD" });
+    const result = await generateForTopic({ ...baseInput(batch), contextSlides: [other] }, ai, DOC_ID);
+    expect(result.mcqs[0].source_slide_ids).toEqual(["C1"]);
+    expect(validateGenerated(result.mcqs[0], new Map(batch.map((s) => [s.id, s])))).toEqual([
+      "Cites a slide outside this topic",
+      "Basis quote not found in cited slide",
+    ]);
   });
 
   it("maps short ids back to slide ids and leaves an unknown id for the pre-check", async () => {
@@ -218,6 +265,7 @@ describe("generateForTopic", () => {
       expect(q.stem).toContain("[doc ab12cd34]");
       expect(q.stem).toContain("Fixture topic");
       expect(q.stem).toContain("batch 3");
+      expect(q.stem).not.toMatch(/\bslide\b/i); // stems are self-contained
       expect(validateGenerated(q, inBatch)).toEqual([]);
     }
   });
