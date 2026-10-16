@@ -340,11 +340,17 @@ isOneToOne: false
         isOneToOne: true
         isSetofReturn: false
       } },
+"delete_stale_draft_batches":
+{ Args: { "p_keep_batch_keys": (string)[],"p_run_id": string }; Returns: number
+                           },
 "is_admin":
 { Args: Record<PropertyKey, never>; Returns: boolean
                            },
 "replace_page_slides":
 { Args: { "p_page_id": string,"p_slides": Json }; Returns: number
+                           },
+"save_generated_questions":
+{ Args: { "p_batch_key": string,"p_items": Json,"p_run_id": string,"p_topic_id": string }; Returns: number
                            },
 "test_reset_app_tables":
 { Args: Record<PropertyKey, never>; Returns: undefined

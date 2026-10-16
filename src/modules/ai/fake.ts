@@ -40,10 +40,71 @@ const topicMapResponder: FakeResponder = (input) => {
   };
 };
 
+/**
+ * One MCQ and one SAQ per batch that pass the pre-checks: both cite the first
+ * slide with text (meta.quoteSlide) and quote its first line (meta.quote). Stems
+ * name the document, topic and batch, so separate documents never repeat a stem.
+ */
+const generateResponder: FakeResponder = (input) => {
+  const { topicName, batchIndex, quoteSlide, quote } = input.meta ?? {};
+  if (topicName === undefined || !quoteSlide || !quote) {
+    throw new Error("The fake generate responder needs meta.topicName, meta.quoteSlide and meta.quote");
+  }
+  const prefix = `[doc ${String(input.documentId ?? "").slice(0, 8)}] ${topicName} batch ${batchIndex ?? 0}`;
+  const source = {
+    source_slide_ids: [String(quoteSlide)],
+    basis_quote: String(quote),
+    conflict_note: null,
+  };
+  const criterion = (id: string, statement: string, weight: number) => ({
+    id,
+    statement,
+    weight,
+    equivalents: [],
+    partial_credit_examples: [],
+  });
+  return {
+    mcqs: [
+      {
+        stem: `${prefix} MCQ: which statement is made on the slide?`,
+        options: [
+          { id: "a", text: "The statement quoted on the slide" },
+          { id: "b", text: "A dose twice as high" },
+          { id: "c", text: "A dose half as high" },
+          { id: "d", text: "A different drug" },
+        ],
+        correct_option_id: "a",
+        explanation: "The slide states it directly.",
+        difficulty: "easy",
+        ...source,
+      },
+    ],
+    saqs: [
+      {
+        stem: `${prefix} SAQ: summarise what the slide teaches.`,
+        model_answer: String(quote),
+        key_concepts: [{ concept: String(quote), equivalents: [] }],
+        rubric: {
+          criteria: [
+            criterion("c1", "Names the drug", 2),
+            criterion("c2", "Gives the dose", 1.5),
+            criterion("c3", "Gives the frequency", 1.5),
+          ],
+          critical_errors: [{ id: "e1", statement: "Gives a different dose" }],
+        },
+        difficulty: "medium",
+        ...source,
+      },
+    ],
+    skipped_slides: [],
+  };
+};
+
 /** Later tasks add one deterministic responder per task here. */
 export const DEFAULT_FAKE_RESPONDERS: FakeResponders = {
   extract: extractResponder,
   topicMap: topicMapResponder,
+  generate: generateResponder,
 };
 
 export function createFakeAiClient(responders: FakeResponders): AiClient {
