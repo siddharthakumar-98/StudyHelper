@@ -340,6 +340,9 @@ isOneToOne: false
         isOneToOne: true
         isSetofReturn: false
       } },
+"create_question_version":
+{ Args: { "p_key": Json,"p_question_id": string,"p_status": Database["public"]['Enums']["question_status"],"p_version": Json }; Returns: number
+                           },
 "delete_stale_draft_batches":
 { Args: { "p_keep_batch_keys": (string)[],"p_run_id": string }; Returns: number
                            },
@@ -359,6 +362,9 @@ isOneToOne: false
                            },
 "save_generated_questions":
 { Args: { "p_batch_key": string,"p_items": Json,"p_run_id": string,"p_topic_id": string }; Returns: number
+                           },
+"set_question_status":
+{ Args: { "p_from": Database["public"]['Enums']["question_status"],"p_note": string,"p_question_id": string,"p_to": Database["public"]['Enums']["question_status"] }; Returns: boolean
                            },
 "test_reset_app_tables":
 { Args: Record<PropertyKey, never>; Returns: undefined

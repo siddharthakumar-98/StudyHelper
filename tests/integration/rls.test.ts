@@ -202,7 +202,8 @@ describe("row level security", () => {
     expect(error).toBeNull();
     expect(data).toHaveLength(2);
     expect(data!.map((q) => q.status).sort()).toEqual(["active", "flagged"]);
-    const versions = await studentClient.from("question_versions").select("*");
+    // Explicit columns: review_notes is not readable by signed-in users (see bank.test.ts).
+    const versions = await studentClient.from("question_versions").select("question_id, version, stem");
     expect(versions.data).toHaveLength(2);
   });
 

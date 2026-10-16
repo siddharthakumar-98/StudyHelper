@@ -273,7 +273,7 @@ async function loadQuestion(db: Db, questionId: string): Promise<LoadedQuestion>
 }
 
 /** The cited slides that still exist, in citation order, with their labels and pages. */
-async function loadCitedSlides(db: Db, slideIds: string[]): Promise<SlideWithPage[]> {
+export async function loadCitedSlides(db: Db, slideIds: string[]): Promise<SlideWithPage[]> {
   if (slideIds.length === 0) return [];
   const { data, error } = await db
     .from("source_slides")
