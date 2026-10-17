@@ -27,3 +27,6 @@ npm-debug.log*
 # playwright
 /blob-report/
 /playwright/.cache/
+
+# generation audit files hold answer keys: share them privately, never commit them
+evals/generation/audit-*.md

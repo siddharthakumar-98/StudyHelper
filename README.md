@@ -3,7 +3,7 @@
 StudyHelper is a web app that helps a doctor practise for the IMA diabetology exam. The course handouts (photographed slides, delivered as a PDF) are turned into a question bank:
 
 1. An admin uploads a handout. The app splits it into pages and reads every slide photo with a vision model (text, tables, diagrams), marking anything unreadable instead of guessing.
-2. The slides are grouped into topics, and the model writes multiple-choice and short-answer questions from the slide content only. Every question cites its source slide, for example "Slide 42 · page 14".
+2. The admin checks (and if needed corrects) the slides, then presses **Write questions**. The slides are grouped into topics, and the model writes multiple-choice and short-answer questions from the slide content only. Every question cites its source slide, for example "Slide 42 · page 14".
 3. A second model pass checks each question, and duplicates of earlier questions are retired. Questions that fail a check go to a review queue.
 4. The admin reviews, edits, approves or rejects questions in the Question Bank. The student browses the active questions and can flag one that looks wrong.
 
@@ -76,10 +76,11 @@ Stack: Next.js 16 (App Router), React 19, Tailwind 4, Supabase (Postgres, Auth, 
 You need to be logged in as the admin, and `AI_FAKE` must be empty (and `ANTHROPIC_API_KEY` set) for real extraction. Processing a handout spends money (see the cost table below).
 
 1. Open **Materials** and use **Add a handout**. Give it a title, optionally a class date, choose the PDF (or photos), and submit. The file goes straight from the browser to private storage, so large phone-camera PDFs (15 to 20 MB) work.
-2. Stay on the handout page and **watch the progress**. The browser drives the pipeline one step at a time: split pages, read slides, build the topic map, generate questions, verify. Keep the page open; if you close it, the daily cron sweep finishes the job later. If a step fails three times you see the error and a **Try again** button.
-3. When reading finishes, **review the slides**. Open any slide to compare the extracted text with the photo. Slides marked partial or unreadable can be corrected by hand and are flagged as admin-corrected. A correction only affects questions generated after it, so review the slides as soon as they appear.
-4. When the status is `ready`, read the **coverage report** on the handout page. It states the real number of questions, per topic and difficulty, and lists slides that produced no question and why (for example unreadable, or nothing testable).
-5. Open **Question Bank**. It opens on **Needs review** while there is something in the queue. Approve, edit, regenerate or reject each question. Questions whose slides contradict each other carry a visible conflict note; read those first.
+2. Stay on the handout page and **watch the progress**. The browser drives the pipeline one step at a time: it splits the pages and reads the slides, and each page's slides appear as soon as that page is read. Keep the page open; if you close it, reopen the handout page to finish (the daily sweep only advances a few steps). If a step fails three times you see the error and a **Try again** button.
+3. When reading finishes, the pipeline **pauses** and the handout shows **Slides are ready to check** (students see "Slides are being checked before questions are written."). **Review the slides** now: open any slide to compare the extracted text with the photo, and correct partial or unreadable ones by hand (they are marked as admin-corrected). Questions are written from the text as it is when you continue.
+4. Press **Write questions**. The page then builds the topic map, writes the questions and checks them, with the same progress panel. A slide corrected later sends every question that cites it back to the review queue with the note "Source slide was corrected".
+5. When the status is `Ready`, read the **coverage report** on the handout page. It states the real number of questions, per topic and difficulty, and lists slides that produced no question and why (for example unreadable, nothing testable, or could not be processed automatically). One question or slide the AI keeps failing on never blocks the handout: a question goes to review with the note "Automatic check could not finish: …", and a slide is skipped and listed in the report.
+6. Open **Question Bank**. It opens on **Needs review** while there is something in the queue. Approve, edit, regenerate or reject each question. Questions whose slides contradict each other carry a visible conflict note; read those first.
 
 Uploading a second handout that overlaps the first reuses existing topics, and questions that repeat earlier ones are retired as duplicates.
 
@@ -113,7 +114,7 @@ Before you run the two paid evals:
 - `evals/extraction/gold.json` must be verified by you against the PDF first. The eval trusts it as ground truth, so a wrong token in it produces a wrong score.
 - The extraction eval needs a handout that has already been uploaded and split (use its document id from the URL of the handout page).
 
-The audit file contains correct answers, so treat it as admin-only. Fill in the checklist columns (Supported by slide, Single best answer / rubric sound, Unambiguous, Difficulty right, Source correct, Notes) while looking at the slide photos, fix or reject any question that fails in the Question Bank, then commit the file. Because it contains answer keys, commit it only to a private repository; if the repository is or may become public, keep the file out of git and share it privately instead. The target is at least 90% of audited questions passing every column, with no unsupported facts.
+The audit file contains correct answers, so treat it as admin-only: this file is git-ignored; share it privately. Fill in the checklist columns (Supported by slide, Single best answer / rubric sound, Unambiguous, Difficulty right, Source correct, Notes) while looking at the slide photos, and fix or reject any question that fails in the Question Bank. The target is at least 90% of audited questions passing every column, with no unsupported facts.
 
 ## Cost
 
@@ -121,14 +122,14 @@ Claude list prices: Opus 5.5 $4 / $20 per million input / output tokens; Sonnet 
 
 | Task | Unit | Opus 5.5 | Sonnet 5.5 |
 | --- | --- | --- | --- |
-| Ingest + generate + verify one 42-page handout (one-time) | per handout | about $8 to $10 | n/a (Opus) |
+| Ingest + generate + verify one 42-page handout (one-time) | per handout | $12–16 per 42-page handout | n/a (Opus) |
 | Grade one SAQ (3 independent samples) | per answer | about $0.13 | about $0.06 |
 | Default test (10 SAQ) | per test | about $1.30 | about $0.65 |
 | IMA preset (5 SAQ) | per test | about $0.65 | about $0.33 |
 | Handwriting transcription | per photographed page | about $0.03 | about $0.015 |
 | MCQ grading | n/a | $0 (done in code) | $0 |
 
-Grading and handwriting rows apply from Phase 3 and Phase 4; only the first row is spent in Phase 2. Three default tests a week comes to about $15 a month on Opus or about $8 a month on Sonnet. Hosting stays at $0 on free tiers.
+Grading and handwriting rows apply from Phase 3 and Phase 4; only the first row is spent in Phase 2. Stage the first real run instead of processing the whole handout at once: read one page, write the topic map, write one batch of questions and check about three, compare the measured cost and step times with the estimate, and only then continue with the rest. Three default tests a week comes to about $15 a month on Opus or about $8 a month on Sonnet. Hosting stays at $0 on free tiers.
 
 Every AI call is recorded in the `ai_calls` table with model, prompt version, token counts and USD cost. Total spend so far:
 
@@ -180,7 +181,7 @@ You do the account steps; nothing here is automatic.
 
 ## Operations
 
-- **Job sweep.** Handout processing runs in short steps, driven by the open handout page. A Vercel cron calls `/api/cron/jobs` once a day (03:00 UTC, `vercel.json`) and finishes any job left unfinished, for example because the admin closed the tab. On the free tier this is a safety net, not the main driver.
+- **Job sweep.** Handout processing runs in short steps, driven by the open handout page. A Vercel cron calls `/api/cron/jobs` once a day (03:00 UTC, `vercel.json`) and advances unfinished jobs, for example because the admin closed the tab. It only starts steps during its first 20 seconds (any step may take up to about 280 seconds of the 300-second limit), so it moves a handout on by a few steps at most: reopen the handout page to finish. On the free tier this is a safety net, not the main driver. It never starts question writing: a handout waiting for its slide check stays there until the admin presses **Write questions**.
 - **Failed jobs.** A step is tried three times. After that the handout page shows the error and a **Try again** button.
 - **Free-tier pause.** A free Supabase project is paused after 7 days without activity. Un-pause it in the dashboard. Phase 6 adds a keep-alive.
 - **Spend.** Check `select sum(cost_usd) from ai_calls;` after each handout.
