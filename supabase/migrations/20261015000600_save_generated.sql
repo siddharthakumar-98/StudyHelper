@@ -1,8 +1,9 @@
 -- Saves one generation batch in one transaction, replacing (never adding to) the
 -- drafts an earlier attempt of the same batch wrote, so a retried or duplicate
 -- generate step leaves the same rows:
---   1. deletes this run's draft questions with this batch key (their versions and
---      answer keys go with them by cascade);
+--   1. deletes this run's version-1 draft questions with this batch key (their
+--      versions and answer keys go with them by cascade; a question being
+--      regenerated, a draft at a later version, is never deleted);
 --   2. inserts each item as a draft question, its version 1 and its answer key.
 -- p_items is [{ type, difficulty, stem, options, source_refs, basis_quote,
 --   conflict_note, review_notes: [text], correct_option_id, explanation,
@@ -30,10 +31,13 @@ begin
   -- Serialise concurrent saves of the same batch.
   perform pg_advisory_xact_lock(hashtext('generate:' || p_run_id::text || ':' || p_batch_key));
 
+  -- Only drafts this stage wrote (version 1): a question being regenerated is a
+  -- draft at a later version in the same run and batch, and keeps its history.
   delete from public.questions
   where generation_run_id = p_run_id
     and batch_key = p_batch_key
-    and status = 'draft';
+    and status = 'draft'
+    and current_version = 1;
 
   for v_item in select value from jsonb_array_elements(p_items) loop
     insert into public.questions (type, topic_id, difficulty, generation_run_id, batch_key)
@@ -88,7 +92,8 @@ grant execute on function public.save_generated_questions(uuid, uuid, text, json
 -- A generation run can be reused by a later topic-map pass (apply_topic_map keeps
 -- the open run), whose batches have different keys. The generate stage calls this
 -- first to delete the run's draft questions from batches that are no longer in
--- its plan. Questions already past draft are kept. Returns the number deleted.
+-- its plan. Questions already past draft are kept, and so are drafts past
+-- version 1 (questions being regenerated). Returns the number deleted.
 -- Service role only.
 create or replace function public.delete_stale_draft_batches(p_run_id uuid, p_keep_batch_keys text[])
 returns int
@@ -101,6 +106,7 @@ begin
   delete from public.questions
   where generation_run_id = p_run_id
     and status = 'draft'
+    and current_version = 1
     and (batch_key is null or not (batch_key = any (coalesce(p_keep_batch_keys, '{}'))));
   get diagnostics v_deleted = row_count;
   return v_deleted;
