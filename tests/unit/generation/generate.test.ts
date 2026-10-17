@@ -182,6 +182,15 @@ describe("generateForTopic", () => {
     expect(text.indexOf("[S1] Slide 41")).toBeLessThan(text.indexOf("(C1) Slide 86"));
   });
 
+  it("skips a numeric line that does not fit and still keeps later, shorter ones (item 5)", () => {
+    const long = `Long numeric line 1: ${"9".repeat(470)}`;
+    const other = slide(87, {
+      verbatim_text: ["Basal 50% of TDD", long, "Bolus 10% per meal", "Plain prose line"].join("\n"),
+    });
+    const excerpt = contextExcerpt(other);
+    expect(excerpt).toBe("Basal 50% of TDD / Bolus 10% per meal / Plain prose line");
+  });
+
   it("keeps numbers that live only in a context slide's tables or diagram, ahead of long prose", async () => {
     const prose = Array.from(
       { length: 12 },

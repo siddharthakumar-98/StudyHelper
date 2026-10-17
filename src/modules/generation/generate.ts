@@ -160,7 +160,8 @@ const NUMERIC_LINE = /[0-9=<>≤≥/]/;
  * A context slide's content in at most 500 characters: its text, table rows and
  * diagram description, with lines that carry numbers or formulas first (so a
  * "450/TDD" in a table survives a long prose slide), then the rest, each group in
- * slide order. Lines are dropped whole; only a single over-long first line is cut.
+ * slide order. A line that does not fit is skipped whole (later, shorter lines can
+ * still fit); only a single over-long first line is cut.
  */
 export function contextExcerpt(slide: SlideForGeneration): string {
   const lines = [
@@ -179,7 +180,8 @@ export function contextExcerpt(slide: SlideForGeneration): string {
     const next = excerpt ? `${excerpt} / ${line}` : line;
     if (next.length > CONTEXT_EXCERPT_CHARS) {
       if (!excerpt) excerpt = line.slice(0, CONTEXT_EXCERPT_CHARS);
-      break;
+      // A later, shorter line (often another number) may still fit.
+      continue;
     }
     excerpt = next;
   }

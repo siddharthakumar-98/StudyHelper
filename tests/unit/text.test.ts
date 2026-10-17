@@ -19,6 +19,13 @@ describe("normalizeForMatch", () => {
   });
 });
 
+describe("normalizeForMatch: minus sign (item 6)", () => {
+  it("treats the Unicode minus sign (U+2212) as a hyphen-minus", () => {
+    expect(normalizeForMatch("HbA1c \u2212 0.5%")).toBe("hba1c - 0.5%");
+    expect(containsNormalized("Target: \u22121.0 SD", "-1.0 sd")).toBe(true);
+  });
+});
+
 describe("containsNormalized", () => {
   it("finds a hyphenated needle in a haystack that uses an em dash", () => {
     expect(containsNormalized("Target HbA1c — 7% for most adults", "hba1c - 7%")).toBe(true);

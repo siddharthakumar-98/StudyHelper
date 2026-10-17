@@ -1,6 +1,6 @@
 /**
  * Normalizes text for forgiving substring checks: NFKC, lowercase, curly quotes
- * to straight, en/em dashes to "-", bullets at the start of a line removed and
+ * to straight, en/em dashes and the minus sign (U+2212) to "-", bullets at the start of a line removed and
  * whitespace collapsed.
  */
 export function normalizeForMatch(s: string): string {
@@ -9,7 +9,7 @@ export function normalizeForMatch(s: string): string {
     .toLowerCase()
     .replace(/[‘’‚‛′]/g, "'")
     .replace(/[“”„‟″]/g, '"')
-    .replace(/[–—]/g, "-")
+    .replace(/[–—−]/g, "-")
     .replace(/^[ \t]*(?:[•▪]|[*-](?=\s))[ \t]*/gm, "")
     .replace(/\s+/g, " ")
     .trim();
