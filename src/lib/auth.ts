@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { cache } from "react";
 import { createServerSupabase } from "@/lib/supabase/server";
 
 export type SessionUser = {
@@ -17,7 +18,12 @@ export class ForbiddenError extends Error {
 
 type SessionLoader = () => Promise<SessionUser | null>;
 
-export const getSessionUser: SessionLoader = async () => {
+/**
+ * The signed-in user and their role. Wrapped in React's cache(), so the layout,
+ * the page and every loader and action guard of one request share a single auth
+ * and profile lookup instead of repeating it (item 16).
+ */
+export const getSessionUser: SessionLoader = cache(async () => {
   const supabase = await createServerSupabase();
   const { data, error } = await supabase.auth.getUser();
   if (error || !data.user) return null;
@@ -31,7 +37,7 @@ export const getSessionUser: SessionLoader = async () => {
     email: data.user.email ?? "",
     role: profile?.role ?? "student",
   };
-};
+});
 
 export async function requireUser(
   load: SessionLoader = getSessionUser,
