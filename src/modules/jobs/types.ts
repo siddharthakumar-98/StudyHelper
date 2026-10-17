@@ -65,6 +65,11 @@ export interface JobStore {
    * nothing written.
    */
   save(row: JobRow, fenceLockedUntil: string | null): Promise<boolean>;
+  /**
+   * Clears the step lock while it is still the one claimed (`fenceLockedUntil`);
+   * a no-op otherwise. Best-effort cleanup when a save fails.
+   */
+  release(id: string, fenceLockedUntil: string | null): Promise<void>;
   /** Failed -> pending with attempts 0, atomically. False when the job is not failed. */
   reset(id: string): Promise<boolean>;
   insert(kind: JobKind, documentId: string, payload: Record<string, unknown>): Promise<string>;

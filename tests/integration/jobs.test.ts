@@ -102,3 +102,20 @@ describe("SupabaseJobStore fencing", () => {
     expect(await store.get(id)).toMatchObject({ status: "pending", attempts: 0 });
   });
 });
+
+describe("SupabaseJobStore.release (item 4)", () => {
+  beforeAll(resetDb);
+
+  it("clears the lock only while it is still the one that was claimed", async () => {
+    const store = new SupabaseJobStore(service as SupabaseClient<Database>);
+    const id = await newJob();
+    const claimed = await store.claim(id, 300);
+    expect(claimed?.locked_until).toBeTruthy();
+
+    await store.release(id, "2000-01-01T00:00:00+00:00");
+    expect((await store.get(id)).locked_until).not.toBeNull();
+
+    await store.release(id, claimed!.locked_until);
+    expect((await store.get(id)).locked_until).toBeNull();
+  });
+});

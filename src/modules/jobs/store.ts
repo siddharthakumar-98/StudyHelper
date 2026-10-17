@@ -32,6 +32,16 @@ export class SupabaseJobStore implements JobStore {
     return data.length > 0;
   }
 
+  async release(id: string, fenceLockedUntil: string | null): Promise<void> {
+    if (fenceLockedUntil === null) return;
+    const { error } = await this.db
+      .from("jobs")
+      .update({ locked_until: null, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("locked_until", fenceLockedUntil);
+    if (error) throw new Error(`job release failed: ${error.message}`);
+  }
+
   async reset(id: string): Promise<boolean> {
     const { data, error } = await this.db
       .from("jobs")
@@ -99,6 +109,13 @@ export class MemoryJobStore implements JobStore {
     if (!current || current.locked_until !== fenceLockedUntil) return false;
     this.rows.set(row.id, { ...row, updated_at: new Date().toISOString() });
     return true;
+  }
+
+  async release(id: string, fenceLockedUntil: string | null): Promise<void> {
+    const row = this.rows.get(id);
+    if (row && fenceLockedUntil !== null && row.locked_until === fenceLockedUntil) {
+      row.locked_until = null;
+    }
   }
 
   async reset(id: string): Promise<boolean> {

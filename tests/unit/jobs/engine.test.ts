@@ -221,6 +221,24 @@ describe("attempt and repeatStep (R37)", () => {
   });
 });
 
+describe("a save that throws (item 4)", () => {
+  it("releases the step lock best-effort and re-throws", async () => {
+    class FlakySaveStore extends MemoryJobStore {
+      override async save(): Promise<boolean> {
+        throw new Error("network down");
+      }
+    }
+    const store = new FlakySaveStore();
+    const id = await createJob(store, "split", DOC, {});
+    const handlers: Handlers = {
+      split: async () => ({ done: false, progress: { current: 1, total: 2, label: "x" } }),
+    };
+    await expect(runJobStep(store, handlers, id, deps)).rejects.toThrow("network down");
+    // The lock is gone, so the next runner need not wait 300 s; the attempt was counted.
+    expect(await store.get(id)).toMatchObject({ locked_until: null, attempts: 1, step: 0 });
+  });
+});
+
 describe("resetJob", () => {
   it("retry() on failed job resets attempts to 0 and status pending", async () => {
     const { store, id, handlers } = await setup({

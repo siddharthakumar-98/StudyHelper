@@ -56,7 +56,9 @@ export async function runJobStepDetailed(
   const claimed = await store.claim(jobId, LOCK_SECONDS);
   if (!claimed) return { snapshot: toSnapshot(await store.get(jobId)), ran: false };
 
-  // Every path below ends in exactly one fenced save that clears locked_until.
+  // Every path below ends in one fenced save that clears locked_until. If that
+  // save itself throws, the lock is released best-effort (still fenced) and the
+  // error re-thrown; if even that fails, the lock simply expires after LOCK_SECONDS.
   let outcome: JobRow;
   const handler = handlers[claimed.kind as JobKind];
   if (!handler) {
@@ -103,7 +105,13 @@ export async function runJobStepDetailed(
   outcome.locked_until = null;
   // Fenced on the lock we claimed: if it expired and another runner took over,
   // our result is dropped rather than clobbering theirs.
-  const saved = await store.save(outcome, claimed.locked_until);
+  let saved: boolean;
+  try {
+    saved = await store.save(outcome, claimed.locked_until);
+  } catch (err) {
+    await store.release(claimed.id, claimed.locked_until).catch(() => undefined);
+    throw err;
+  }
   const snapshot = saved ? toSnapshot(outcome) : toSnapshot(await store.get(jobId));
   return { snapshot, ran: true };
 }

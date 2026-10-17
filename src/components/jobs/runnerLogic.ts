@@ -30,3 +30,18 @@ export function decideNext(snapshot: JobSnapshot): RunnerDecision {
 export function startJobId(jobId: string, latest: JobSnapshot | null): string {
   return latest?.status === "failed" ? latest.id : jobId;
 }
+
+/** How long the runner waits before re-sending a step after a transient failure. */
+export const TRANSIENT_RETRY_DELAYS_MS = [2000, 5000, 10000];
+
+/**
+ * The wait before re-sending a step that failed in transit (`status` null: a
+ * network error) or on the server (5xx), after `retriesSoFar` such retries; null
+ * when the runner should stop and show the failure (a sign-out, any other client
+ * error, or the retries are used up). The engine makes a repeated POST safe.
+ */
+export function transientRetryDelay(status: number | null, retriesSoFar: number): number | null {
+  const transient = status === null || status >= 500;
+  if (!transient) return null;
+  return TRANSIENT_RETRY_DELAYS_MS[retriesSoFar] ?? null;
+}

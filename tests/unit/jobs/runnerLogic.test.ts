@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { decideNext, startJobId } from "@/components/jobs/runnerLogic";
+import {
+  TRANSIENT_RETRY_DELAYS_MS,
+  decideNext,
+  startJobId,
+  transientRetryDelay,
+} from "@/components/jobs/runnerLogic";
 import type { JobSnapshot } from "@/modules/jobs/types";
 
 const snap = (over: Partial<JobSnapshot>): JobSnapshot => ({
@@ -42,5 +47,18 @@ describe("startJobId", () => {
   it("starts from the given job otherwise", () => {
     expect(startJobId("head", null)).toBe("head");
     expect(startJobId("head", snap({ id: "second", status: "pending" }))).toBe("head");
+  });
+});
+
+describe("transientRetryDelay (item 4)", () => {
+  it("waits 2 s, 5 s, then 10 s after a network error or a 5xx, then gives up", () => {
+    expect(TRANSIENT_RETRY_DELAYS_MS).toEqual([2000, 5000, 10000]);
+    for (const status of [null, 500, 502, 503, 504]) {
+      expect([0, 1, 2, 3].map((n) => transientRetryDelay(status, n))).toEqual([2000, 5000, 10000, null]);
+    }
+  });
+
+  it("never retries a sign-out or another client error by itself", () => {
+    for (const status of [401, 403, 404, 400]) expect(transientRetryDelay(status, 0)).toBeNull();
   });
 });

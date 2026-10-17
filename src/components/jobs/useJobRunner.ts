@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { JobSnapshot } from "@/modules/jobs/types";
-import { decideNext, startJobId } from "./runnerLogic";
+import { decideNext, startJobId, transientRetryDelay } from "./runnerLogic";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -44,8 +44,12 @@ export function useJobRunner(jobId: string | null): {
       let id = startJobId(jobId!, latest.current);
       let retry = attempt.retry;
       let last: JobSnapshot | null = null;
+      // Network errors and 5xx answers are retried a few times (2 s, 5 s, 10 s) before
+      // the failure is shown: a phone switching networks should not stop the pipeline.
+      let transientRetries = 0;
       setRunning(true);
       while (!cancelled) {
+        let status: number | null = null;
         try {
           const res = await fetch(`/api/jobs/${id}/step`, {
             method: "POST",
@@ -53,18 +57,27 @@ export function useJobRunner(jobId: string | null): {
             body: JSON.stringify({ retry }),
             signal: controller.signal,
           });
+          status = res.status;
           retry = false;
           const type = res.headers.get("content-type") ?? "";
           if (!res.ok || !type.includes("application/json")) {
+            if (res.redirected) status = 401;
             throw new Error(
-              res.status === 401 || res.redirected
+              status === 401
                 ? "You have been signed out. Sign in again."
                 : `The server returned an error (${res.status}).`,
             );
           }
           last = (await res.json()) as JobSnapshot;
+          transientRetries = 0;
         } catch (err) {
           if (cancelled) return;
+          const wait = transientRetryDelay(status, transientRetries);
+          if (wait !== null) {
+            transientRetries += 1;
+            await sleep(wait);
+            continue;
+          }
           const failed = failedSnapshot(id, last, err instanceof Error ? err.message : "Network error");
           latest.current = failed;
           setSnapshot(failed);
