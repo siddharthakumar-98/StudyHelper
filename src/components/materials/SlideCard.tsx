@@ -33,6 +33,13 @@ function Highlighted({ text }: { text: string }) {
   );
 }
 
+function savedMessage(sentToReview: number): string {
+  if (sentToReview === 0) return "Saved";
+  return sentToReview === 1
+    ? "Saved. 1 question that uses this slide now needs review."
+    : `Saved. ${sentToReview} questions that use this slide now need review.`;
+}
+
 export function SlideCard({ slide, isAdmin }: { slide: SlideView; isAdmin: boolean }) {
   const heading = slideHeading({
     printed_slide_no: slide.printedSlideNo,
@@ -52,10 +59,14 @@ export function SlideCard({ slide, isAdmin }: { slide: SlideView; isAdmin: boole
     setSaving(true);
     setMessage(null);
     try {
-      await updateSlideText(slide.id, text);
+      const result = await updateSlideText(slide.id, text);
+      if (!result.ok) {
+        setMessage({ kind: "error", text: result.error });
+        return;
+      }
       setSavedText(text);
       setCorrected(true);
-      setMessage({ kind: "ok", text: "Saved" });
+      setMessage({ kind: "ok", text: savedMessage(result.questionsSentToReview) });
     } catch (err) {
       setMessage({
         kind: "error",

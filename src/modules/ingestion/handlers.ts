@@ -144,7 +144,8 @@ export const splitHandler: JobHandler = async ({ db, documentId, step }) => {
 /**
  * Step i reads the i-th page (by page_no) into slides. Each step replaces that
  * page's slides in one transaction, so retries and duplicates never add rows.
- * The last step hands over to topic_map.
+ * The last step leaves the handout in 'review' with no next job: the admin
+ * checks the slides, then starts question writing (R38).
  */
 export const extractHandler: JobHandler = async ({ db, ai, documentId, step }) => {
   const { data: pages, error: pagesError } = await db
@@ -187,5 +188,15 @@ export const extractHandler: JobHandler = async ({ db, ai, documentId, step }) =
 
   const progress = { current: step + 1, total, label: `Reading page ${step + 1} of ${total}` };
   if (step < total - 1) return { done: false, progress };
-  return { done: true, progress, next: { kind: "topic_map", payload: {} } };
+
+  // Pause for the admin's slide check (R38): "Write questions" starts topic_map
+  // (start_question_writing). Only moves the status forward from processing, so a
+  // late duplicate extract cannot pull a handout back from later stages.
+  const { error: statusError } = await db
+    .from("documents")
+    .update({ status: "review" })
+    .eq("id", documentId)
+    .eq("status", "processing");
+  if (statusError) throw new Error(`Could not update the handout: ${statusError.message}`);
+  return { done: true, progress };
 };

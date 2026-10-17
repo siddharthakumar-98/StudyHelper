@@ -366,6 +366,9 @@ isOneToOne: false
 "set_question_status":
 { Args: { "p_from": Database["public"]['Enums']["question_status"],"p_note": string,"p_question_id": string,"p_to": Database["public"]['Enums']["question_status"] }; Returns: boolean
                            },
+"start_question_writing":
+{ Args: { "p_document_id": string }; Returns: string
+                           },
 "test_reset_app_tables":
 { Args: Record<PropertyKey, never>; Returns: undefined
                            }

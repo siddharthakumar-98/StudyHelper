@@ -2,6 +2,7 @@
 
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { createServiceSupabase } from "@/lib/supabase/service";
+import { runAction, type ActionResult } from "@/modules/bank/actionResult";
 import {
   createUploadRecords,
   finalizeUploadRecords,
@@ -11,6 +12,7 @@ import {
 import {
   latestJobOf,
   pageViewUrlFor,
+  startQuestionWritingRecord,
   updateSlideTextRecord,
   type LatestJob,
 } from "./slideService";
@@ -27,9 +29,26 @@ export async function finalizeUpload(documentId: string): Promise<{ jobId: strin
   return finalizeUploadRecords(createServiceSupabase(), documentId);
 }
 
-export async function updateSlideText(slideId: string, verbatimText: string): Promise<void> {
-  await requireAdmin();
-  await updateSlideTextRecord(createServiceSupabase(), slideId, verbatimText);
+/**
+ * Saves a slide correction; questions that cite the slide go back to the admin
+ * (R38). `questionsSentToReview` says how many.
+ */
+export async function updateSlideText(
+  slideId: string,
+  verbatimText: string,
+): Promise<ActionResult<{ questionsSentToReview: number }>> {
+  return runAction(async () => {
+    await requireAdmin();
+    return updateSlideTextRecord(createServiceSupabase(), slideId, verbatimText);
+  });
+}
+
+/** "Write questions": starts topic_map once the slides have been checked (R38). */
+export async function startQuestionWriting(documentId: string): Promise<ActionResult<{ jobId: string }>> {
+  return runAction(async () => {
+    await requireAdmin();
+    return startQuestionWritingRecord(createServiceSupabase(), documentId);
+  });
 }
 
 export async function getPageViewUrl(pageId: string): Promise<string> {

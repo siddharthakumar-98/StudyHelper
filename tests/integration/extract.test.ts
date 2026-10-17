@@ -103,17 +103,18 @@ async function extractAll(documentId: string, deps: StepDeps = fakeDeps) {
 describe("extract stage", () => {
   beforeAll(resetDb);
 
-  it("reads every page into slides, then hands over to topic_map", async () => {
+  it("reads every page into slides, then pauses for the admin's slide check (R38)", async () => {
     const documentId = await splitTwoPageDocument();
-    const { store, snapshots } = await extractAll(documentId);
+    const { snapshots } = await extractAll(documentId);
 
     expect(snapshots.map((s) => s.progress)).toEqual([
       { current: 1, total: 2, label: "Reading page 1 of 2" },
       { current: 2, total: 2, label: "Reading page 2 of 2" },
     ]);
     const last = snapshots.at(-1)!;
-    expect(last).toMatchObject({ status: "done", error: null });
-    expect((await store.get(last.nextJobId!)).kind).toBe("topic_map");
+    expect(last).toMatchObject({ status: "done", error: null, nextJobId: null });
+    const { data: doc } = await service.from("documents").select("status").eq("id", documentId).single();
+    expect(doc!.status).toBe("review");
 
     const slides = await slidesOf(documentId);
     expect(slides).toEqual([

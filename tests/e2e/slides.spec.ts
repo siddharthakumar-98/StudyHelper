@@ -2,8 +2,9 @@ import { expect, test, type Page } from "@playwright/test";
 import { loginAs } from "./helpers";
 import { makePdf } from "../fixtures/makePdf";
 
-// AI_FAKE=1 (set by the Playwright web server): one clear slide per page. The
-// pipeline runs through verify with the fakes, so the handout ends "Ready".
+// AI_FAKE=1 (set by the Playwright web server): one clear slide per page. Reading
+// pauses for the admin's slide check (R38); after "Write questions" the pipeline
+// runs through verify with the fakes, so the handout ends "Ready".
 
 async function uploadTwoPageHandout(page: Page, title: string): Promise<string> {
   await page.goto("/materials");
@@ -37,6 +38,16 @@ async function reopen(page: Page, docPath: string): Promise<Page> {
 const card = (page: Page, n: number) =>
   page.getByRole("article", { name: new RegExp(`^Slide ${n}\\b`) });
 
+/** Clicks "Write questions" once the slides wait for their check (R38). */
+async function writeQuestions(page: Page) {
+  const panel = page.getByRole("region", { name: "Next step" });
+  await expect(panel.getByRole("heading", { name: "Slides are ready to check" })).toBeVisible({
+    timeout: 90_000,
+  });
+  await page.locator('section[aria-label="Next step"][data-hydrated="true"]').waitFor();
+  await panel.getByRole("button", { name: "Write questions" }).click();
+}
+
 test.describe("slide review", () => {
   test.describe.configure({ timeout: 180_000 });
 
@@ -66,9 +77,26 @@ test.describe("slide review", () => {
     await expect(card(page, 1).getByText("Corrected", { exact: true })).toBeVisible();
     await expect(card(page, 2).getByText("Corrected", { exact: true })).toHaveCount(0);
 
+    // Reading stopped for the slide check; the corrected text is what questions are written from.
+    await writeQuestions(page);
     // The fake pipeline finishes: questions are written and checked, the handout is ready.
     // No reload: the page converges by itself when the last stage finishes.
     await expect(page.getByText(/· Ready$/)).toBeVisible({ timeout: 90_000 });
+
+    // A later correction sends the questions that cite the slide back for review (R38).
+    // The fake writes both of its questions from slide 1.
+    page = await reopen(page, docPath);
+    const again = card(page, 1);
+    await page.locator('div[data-hydrated="true"]', { has: page.getByRole("checkbox") }).waitFor();
+    await again.getByLabel("Slide text").fill("Corrected text. Metformin 1000 mg.");
+    await again.getByRole("button", { name: "Save correction" }).click();
+    await expect(
+      again.getByText("Saved. 2 questions that use this slide now need review."),
+    ).toBeVisible();
+    page = await reopen(page, docPath);
+    await expect(
+      page.getByRole("region", { name: "Coverage report" }).getByText("2 need review · 0 retired"),
+    ).toBeVisible();
 
     // "View photo" opens a signed URL that works.
     // The browser's own request for the opened photo must succeed. (Which viewer shows a
@@ -85,7 +113,7 @@ test.describe("slide review", () => {
     await loginAs(studentPage, "student");
     await studentPage.goto(docPath);
     await expect(card(studentPage, 1)).toBeVisible();
-    await expect(card(studentPage, 1)).toContainText("Corrected text. Metformin 850 mg.");
+    await expect(card(studentPage, 1)).toContainText("Corrected text. Metformin 1000 mg.");
     await expect(studentPage.getByRole("textbox")).toHaveCount(0);
     await expect(studentPage.getByRole("button", { name: "Save correction" })).toHaveCount(0);
     await expect(card(studentPage, 2).getByRole("button", { name: "View photo" })).toBeVisible();

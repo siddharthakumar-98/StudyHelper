@@ -36,6 +36,10 @@ const LEGAL: LegalRow[] = [
   { from: "active", action: "regenerate", actor: "admin", to: "draft", newVersion: true },
   { from: "needs_review", action: "regenerate", actor: "admin", to: "draft", newVersion: true },
   { from: "flagged", action: "regenerate", actor: "admin", to: "draft", newVersion: true },
+  // R38: a corrected source slide sends the question (back) to the admin.
+  { from: "active", action: "source_corrected", actor: "system", to: "needs_review", newVersion: false },
+  { from: "needs_review", action: "source_corrected", actor: "system", to: "needs_review", newVersion: false },
+  { from: "flagged", action: "source_corrected", actor: "system", to: "flagged", newVersion: false },
 ];
 
 const STATUSES: QuestionStatus[] = ["draft", "needs_review", "active", "flagged", "retired"];
@@ -48,6 +52,7 @@ const ACTIONS: LifecycleAction[] = [
   "edit",
   "reject",
   "regenerate",
+  "source_corrected",
 ];
 const ACTORS: Actor[] = ["system", "student", "admin"];
 

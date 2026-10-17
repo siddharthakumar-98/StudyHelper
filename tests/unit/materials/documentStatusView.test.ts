@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { documentStatusView, STUDENT_ATTENTION_COPY } from "@/components/materials/status";
+import {
+  documentStatusView,
+  STUDENT_ATTENTION_COPY,
+  STUDENT_REVIEWING_COPY,
+} from "@/components/materials/status";
 
-const job = (status: "pending" | "running" | "done" | "failed", id = "j1") => ({
+const job = (status: "pending" | "running" | "done" | "failed", id = "j1", kind = "extract") => ({
   id,
   status,
-  kind: "extract",
+  kind,
 });
 
 describe("documentStatusView", () => {
@@ -81,5 +85,54 @@ describe("documentStatusView with a requested job", () => {
         requestedJobId: "first",
       }).runnerJobId,
     ).toBeNull();
+  });
+});
+
+describe("documentStatusView while the slides wait for the admin's check (R38)", () => {
+  it("an admin sees 'Slides are ready to check' and the Write questions button, with no runner or polling", () => {
+    for (const requestedJobId of [null, "first"]) {
+      expect(
+        documentStatusView({ docStatus: "review", latestJob: job("done"), isAdmin: true, requestedJobId }),
+      ).toEqual({
+        label: "Slides are ready to check",
+        studentNotice: null,
+        runnerJobId: null,
+        poll: false,
+        writeQuestions: true,
+      });
+    }
+  });
+
+  it("a student is told the slides are being checked, and the page keeps refreshing", () => {
+    const view = documentStatusView({ docStatus: "review", latestJob: job("done"), isAdmin: false });
+    expect(view).toMatchObject({ studentNotice: "reviewing", runnerJobId: null, poll: true, writeQuestions: false });
+    expect(STUDENT_REVIEWING_COPY).toBe("Slides are being checked before questions are written.");
+  });
+
+  it("once Write questions started a job, the admin's runner drives it (the open job beats an old ?job=)", () => {
+    expect(
+      documentStatusView({
+        docStatus: "processing",
+        latestJob: job("pending", "tm", "topic_map"),
+        isAdmin: true,
+        requestedJobId: "first",
+      }),
+    ).toMatchObject({ runnerJobId: "tm", writeQuestions: false, poll: false });
+  });
+});
+
+describe("documentStatusView labels the real stage (item 12)", () => {
+  it.each([
+    ["split", "Preparing pages"],
+    ["extract", "Reading slides"],
+    ["topic_map", "Finding topics"],
+    ["generate", "Writing questions"],
+    ["verify", "Checking questions"],
+  ])("a %s job shows %s", (kind, label) => {
+    for (const isAdmin of [true, false]) {
+      expect(
+        documentStatusView({ docStatus: "processing", latestJob: job("pending", "j", kind), isAdmin }).label,
+      ).toBe(label);
+    }
   });
 });

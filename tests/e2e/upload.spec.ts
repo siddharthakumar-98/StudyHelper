@@ -32,6 +32,10 @@ test.describe("handout upload", () => {
     await expect(page.getByRole("heading", { name: "Two page handout" })).toBeVisible();
     await expect(page.getByText("2 pages").first()).toBeVisible({ timeout: 60_000 });
     await expect(page.getByRole("list", { name: "Pages" }).getByText("PDF")).toHaveCount(2);
+    // Reading pauses for the slide check: nothing is written until the admin says so (R38).
+    await expect(
+      page.getByRole("region", { name: "Next step" }).getByRole("button", { name: "Write questions" }),
+    ).toBeVisible({ timeout: 90_000 });
   });
 
   test("a full-size 20 MB handout uploads straight to storage", async ({ page }) => {

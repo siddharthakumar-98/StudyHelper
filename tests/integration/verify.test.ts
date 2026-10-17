@@ -4,7 +4,9 @@ import { createJob, runJobStep } from "@/modules/jobs/engine";
 import type { JobSnapshot, StepDeps } from "@/modules/jobs/engine";
 import { JOB_HANDLERS } from "@/modules/jobs/registry";
 import { VERIFY_START_WINDOW_MS } from "@/modules/generation/handlers";
-import { MemoryJobStore } from "@/modules/jobs/store";
+import { MemoryJobStore, SupabaseJobStore } from "@/modules/jobs/store";
+import type { JobStore } from "@/modules/jobs/types";
+import { startQuestionWritingRecord } from "@/modules/ingestion/slideService";
 import type { AiCallInput } from "@/modules/ai/client";
 import { APIConnectionTimeoutError } from "@anthropic-ai/sdk";
 import { AiTruncatedError } from "@/modules/ai/errors";
@@ -33,7 +35,7 @@ const STEMS = [
   "Which formula estimates the insulin correction factor?",
 ];
 
-async function runToEnd(store: MemoryJobStore, jobId: string, deps: StepDeps) {
+async function runToEnd(store: JobStore, jobId: string, deps: StepDeps) {
   const snapshots: JobSnapshot[] = [];
   for (let i = 0; i < 40; i++) {
     const snapshot = await runJobStep(store, JOB_HANDLERS, jobId, deps);
@@ -44,7 +46,7 @@ async function runToEnd(store: MemoryJobStore, jobId: string, deps: StepDeps) {
 }
 
 /** Runs a job and every job it queues; returns each job's kind and snapshots. */
-async function runChain(store: MemoryJobStore, jobId: string, deps: StepDeps) {
+async function runChain(store: JobStore, jobId: string, deps: StepDeps) {
   const jobs: { kind: string; snapshots: JobSnapshot[] }[] = [];
   let next: string | null = jobId;
   while (next) {
@@ -57,7 +59,10 @@ async function runChain(store: MemoryJobStore, jobId: string, deps: StepDeps) {
   return jobs;
 }
 
-/** Uploads an n-page PDF and runs split → extract → topic_map → generate → verify. */
+/**
+ * Uploads an n-page PDF and runs split → extract, then (as the admin's "Write
+ * questions" does after the slide check, R38) topic_map → generate → verify.
+ */
 async function uploadAndRunPipeline(pages: number, deps: StepDeps) {
   const admin = await createTestUser("admin");
   const pdf = await makePdf({ pages });
@@ -71,8 +76,15 @@ async function uploadAndRunPipeline(pages: number, deps: StepDeps) {
     .uploadToSignedUrl(uploads[0].path, uploads[0].token, pdf, { contentType: "application/pdf" });
   expect(error).toBeNull();
   const store = new MemoryJobStore();
-  const jobs = await runChain(store, await createJob(store, "split", documentId, {}), deps);
-  expect(jobs.map((j) => j.kind)).toEqual(["split", "extract", "topic_map", "generate", "verify"]);
+  const reading = await runChain(store, await createJob(store, "split", documentId, {}), deps);
+  expect(reading.map((j) => j.kind)).toEqual(["split", "extract"]);
+  const { data: paused } = await service.from("documents").select("status").eq("id", documentId).single();
+  expect(paused!.status).toBe("review");
+
+  const { jobId } = await startQuestionWritingRecord(db, documentId);
+  const jobStore = new SupabaseJobStore(db);
+  const writing = await runChain(jobStore, jobId, deps);
+  expect(writing.map((j) => j.kind)).toEqual(["topic_map", "generate", "verify"]);
   return documentId;
 }
 

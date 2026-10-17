@@ -8,7 +8,9 @@ export type LifecycleAction =
   | "approve"
   | "edit"
   | "reject"
-  | "regenerate";
+  | "regenerate"
+  /** An admin corrected a slide the question cites (R38). */
+  | "source_corrected";
 
 export type Actor = "system" | "student" | "admin";
 
@@ -34,18 +36,22 @@ const TRANSITIONS: Record<QuestionStatus, Partial<Record<LifecycleAction, TableE
     edit: { actors: ["admin"], to: "active", newVersion: true },
     reject: { actors: ["admin"], to: "retired", newVersion: false },
     regenerate: { actors: ["admin"], to: "draft", newVersion: true },
+    source_corrected: { actors: ["system"], to: "needs_review", newVersion: false },
   },
   needs_review: {
     edit: { actors: ["admin"], to: "active", newVersion: true },
     approve: { actors: ["admin"], to: "active", newVersion: false },
     reject: { actors: ["admin"], to: "retired", newVersion: false },
     regenerate: { actors: ["admin"], to: "draft", newVersion: true },
+    source_corrected: { actors: ["system"], to: "needs_review", newVersion: false },
   },
   flagged: {
     edit: { actors: ["admin"], to: "active", newVersion: true },
     approve: { actors: ["admin"], to: "active", newVersion: false },
     reject: { actors: ["admin"], to: "retired", newVersion: false },
     regenerate: { actors: ["admin"], to: "draft", newVersion: true },
+    // Already waiting for the admin; moving it would silently resolve the student's flag.
+    source_corrected: { actors: ["system"], to: "flagged", newVersion: false },
   },
   retired: {},
 };

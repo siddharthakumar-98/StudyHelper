@@ -58,6 +58,15 @@ test.describe("pipeline", () => {
     await page.getByRole("button", { name: "Add handout" }).click();
     await expect(page).toHaveURL(/\/materials\/[0-9a-f-]{36}\?job=/, { timeout: 90_000 });
 
+    // Reading stops for the slide check (R38); the admin starts question writing.
+    const next = page.getByRole("region", { name: "Next step" });
+    await expect(next.getByRole("heading", { name: "Slides are ready to check" })).toBeVisible({
+      timeout: 90_000,
+    });
+    await expect(page.getByRole("article")).toHaveCount(2);
+    await page.locator('section[aria-label="Next step"][data-hydrated="true"]').waitFor();
+    await next.getByRole("button", { name: "Write questions" }).click();
+
     // No reload: the page converges by itself when the last stage finishes.
     const report = page.getByRole("region", { name: "Coverage report" });
     await expect(report).toBeVisible({ timeout: 120_000 });
@@ -86,6 +95,50 @@ test.describe("pipeline", () => {
     // The progress panel went through every stage on the way.
     const seen = await page.evaluate(() => (window as unknown as { __stages: string[] }).__stages);
     expect(seen).toEqual(STAGES);
+  });
+
+  test.describe("slide check pause", () => {
+    let docId: string;
+    const service = serviceClient();
+
+    test.beforeEach(async () => {
+      const { data, error } = await service
+        .from("documents")
+        .insert({ title: "Paused handout", status: "review", page_count: 0 })
+        .select("id")
+        .single();
+      expect(error).toBeNull();
+      docId = data!.id;
+    });
+
+    test.afterEach(async () => {
+      await service.from("documents").delete().eq("id", docId);
+    });
+
+    test("students are told the slides are being checked; admins get the Write questions button", async ({
+      page,
+      browser,
+    }) => {
+      const student = await browser.newContext();
+      const studentPage = await student.newPage();
+      await loginAs(studentPage, "student");
+      await studentPage.goto(`/materials/${docId}`);
+      await expect(
+        studentPage.getByText("Slides are being checked before questions are written."),
+      ).toBeVisible();
+      await expect(studentPage.getByRole("button", { name: "Write questions" })).toHaveCount(0);
+      await student.close();
+
+      await loginAs(page, "admin");
+      await page.goto(`/materials/${docId}`);
+      const button = page.getByRole("region", { name: "Next step" }).getByRole("button", {
+        name: "Write questions",
+      });
+      await expect(button).toBeVisible();
+      const box = await button.boundingBox();
+      expect(box!.height).toBeGreaterThanOrEqual(48);
+      expect(box!.width).toBeGreaterThanOrEqual(48);
+    });
   });
 
   test.describe("admin progress panel", () => {

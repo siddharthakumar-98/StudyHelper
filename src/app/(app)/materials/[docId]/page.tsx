@@ -4,6 +4,7 @@ import { DocumentProgress } from "@/components/materials/DocumentProgress";
 import {
   STUDENT_ATTENTION_COPY,
   STUDENT_PREPARING_COPY,
+  STUDENT_REVIEWING_COPY,
   documentStatusView,
   formatClassDate,
   pagesLabel,
@@ -13,8 +14,15 @@ import { createServerSupabase } from "@/lib/supabase/server";
 import { SlideList } from "@/components/materials/SlideList";
 import { parseTables, type SlideView } from "@/components/materials/slideReview";
 import { CoverageReportView } from "@/components/materials/CoverageReportView";
+import { WriteQuestions } from "@/components/materials/WriteQuestions";
 import { getCoverageReport } from "@/modules/generation/coverageServer";
 import { getLatestJob } from "@/modules/ingestion/upload";
+
+const STUDENT_NOTICE_COPY = {
+  preparing: STUDENT_PREPARING_COPY,
+  attention: STUDENT_ATTENTION_COPY,
+  reviewing: STUDENT_REVIEWING_COPY,
+} as const;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -105,9 +113,14 @@ export default async function DocumentPage({
           <DocumentProgress jobId={view.runnerJobId} />
         </div>
       ) : null}
+      {view.writeQuestions ? (
+        <div className="mt-6 max-w-xl">
+          <WriteQuestions documentId={doc.id} />
+        </div>
+      ) : null}
       {view.studentNotice ? (
         <p role="status" className="mt-6 max-w-xl rounded-lg border-2 border-zinc-300 p-4 text-lg">
-          {view.studentNotice === "attention" ? STUDENT_ATTENTION_COPY : STUDENT_PREPARING_COPY}
+          {STUDENT_NOTICE_COPY[view.studentNotice]}
         </p>
       ) : null}
       {view.poll ? <AutoRefresh everyMs={isAdmin ? 5_000 : 15_000} /> : null}

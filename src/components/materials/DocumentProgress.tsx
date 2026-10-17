@@ -5,7 +5,10 @@ import { useEffect, useRef } from "react";
 import { PipelineProgress } from "@/components/jobs/PipelineProgress";
 import { useJobRunner } from "@/components/jobs/useJobRunner";
 
-/** Drives the handout's job chain from the browser and refreshes the page as stages finish. */
+/**
+ * Drives the handout's job chain from the browser and refreshes the page as stages
+ * finish, and after every page read.
+ */
 export function DocumentProgress({ jobId }: { jobId: string }) {
   const router = useRouter();
   const { snapshot, retry } = useJobRunner(jobId);
@@ -15,7 +18,10 @@ export function DocumentProgress({ jobId }: { jobId: string }) {
     if (!snapshot) return;
     // The page list changes once splitting is done (and every later stage after it).
     if (snapshot.kind === "split" && snapshot.status !== "done") return;
-    const key = `${snapshot.kind}:${snapshot.status}`;
+    // While reading, each page's slides appear as soon as it is read, so the admin
+    // can start checking them (R38).
+    const page = snapshot.kind === "extract" ? `:${snapshot.progress?.current ?? 0}` : "";
+    const key = `${snapshot.kind}:${snapshot.status}${page}`;
     if (lastRefresh.current === key) return;
     lastRefresh.current = key;
     router.refresh();
