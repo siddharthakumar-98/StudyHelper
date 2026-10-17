@@ -69,8 +69,9 @@ async function logAiCall(row: AiCallLog): Promise<void> {
   if (error) throw new Error(`ai_calls insert failed: ${error.message}`);
 }
 
+// maxRetries 0, as in the app (R14): a failed page is recorded, never silently re-bought.
 const ai = createAnthropicAiClient(
-  new Anthropic({ apiKey: env("ANTHROPIC_API_KEY"), maxRetries: 2, timeout: 270_000 }),
+  new Anthropic({ apiKey: env("ANTHROPIC_API_KEY"), maxRetries: 0, timeout: 270_000 }),
   logAiCall,
 );
 
@@ -95,7 +96,10 @@ const pageNos = [...new Set(gold.map((g) => g.page_no))].sort((a, b) => a - b);
 console.log(`Extracting ${pageNos.length} gold pages live (estimated cost about $0.40)…`);
 
 const extracted = new Map<number, ExtractedSlide[]>();
-for (const pageNo of pageNos) {
+/** Pages that could not be extracted, with why: their slides score as missing. */
+const failures = new Map<number, string>();
+
+async function extractGoldPage(pageNo: number): Promise<ExtractedSlide[]> {
   const { data: page, error } = await db
     .from("source_pages")
     .select("kind, storage_path")
@@ -112,11 +116,20 @@ for (const pageNo of pageNos) {
     throw new Error(`Could not download page ${pageNo}: ${downloadError?.message ?? "missing"}`);
   }
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  extracted.set(
-    pageNo,
-    await extractPage({ kind: page.kind, storagePath: page.storage_path, mime }, bytes, ai, documentId),
-  );
-  console.log(`  page ${pageNo}: ${extracted.get(pageNo)!.length} slide(s)`);
+  return extractPage({ kind: page.kind, storagePath: page.storage_path, mime, pageNo }, bytes, ai, documentId);
+}
+
+// One failed page (a refusal, a timeout, a cut-off answer) must not lose the paid
+// results of the others: record it and carry on; the report is always written.
+for (const pageNo of pageNos) {
+  try {
+    extracted.set(pageNo, await extractGoldPage(pageNo));
+    console.log(`  page ${pageNo}: ${extracted.get(pageNo)!.length} slide(s)`);
+  } catch (err) {
+    const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    failures.set(pageNo, message);
+    console.error(`  page ${pageNo}: FAILED (${message})`);
+  }
 }
 
 const rows = gold.map((g) => {
@@ -154,7 +167,19 @@ const report = [
     `target ≥ ${pct(TARGET_RECALL)}: **${recall >= TARGET_RECALL ? "PASS" : "FAIL"}**`,
   `- Legibility agreement: **${legibilityOk}/${rows.length}** ` +
     "(gold `unreadable` passes when the extraction is not `clear`)",
+  `- Pages that failed: **${failures.size}/${pageNos.length}**` +
+    (failures.size > 0 ? " (their slides count as missing; see below)" : ""),
   "",
+  ...(failures.size > 0
+    ? [
+        "## Failed pages",
+        "",
+        "| Page | Error |",
+        "| --- | --- |",
+        ...[...failures].map(([pageNo, message]) => `| ${pageNo} | ${cell(message)} |`),
+        "",
+      ]
+    : []),
   "## Per slide",
   "",
   "| Page | Photo | Slide | Legibility (gold → got) | Recall | Missing tokens |",
@@ -176,4 +201,7 @@ const report = [
 ].join("\n");
 
 writeFileSync(REPORT_PATH, report);
-console.log(`Recall ${pct(recall)}, legibility ${legibilityOk}/${rows.length}. Wrote ${REPORT_PATH.pathname}`);
+console.log(
+  `Recall ${pct(recall)}, legibility ${legibilityOk}/${rows.length}, ` +
+    `${failures.size} failed page(s). Wrote ${REPORT_PATH.pathname}`,
+);
