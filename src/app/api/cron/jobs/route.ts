@@ -1,3 +1,4 @@
+import "server-only";
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { createServiceSupabase } from "@/lib/supabase/service";
@@ -5,10 +6,9 @@ import { getAiClient } from "@/modules/ai/usage";
 import { runJobStepDetailed } from "@/modules/jobs/engine";
 import { JOB_HANDLERS } from "@/modules/jobs/registry";
 import { SupabaseJobStore } from "@/modules/jobs/store";
+import { sweepJobs } from "@/modules/jobs/sweep";
 
 export const maxDuration = 300;
-
-const BUDGET_MS = 240_000;
 
 function authorized(request: Request): boolean {
   const secret = process.env.CRON_SECRET;
@@ -18,7 +18,10 @@ function authorized(request: Request): boolean {
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
-/** Sweeps unfinished jobs, oldest first, until the time budget is spent. */
+/**
+ * Advances unfinished jobs, oldest first, starting steps only in the first 20 s
+ * (sweepJobs), so the last step started still ends inside maxDuration.
+ */
 export async function GET(request: Request) {
   if (!authorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -28,7 +31,6 @@ export async function GET(request: Request) {
   const db = createServiceSupabase();
   const store = new SupabaseJobStore(db);
   const deps = { ai: getAiClient(), db };
-  const timeLeft = () => Date.now() - startedAt < BUDGET_MS;
 
   const { data: jobs, error } = await db
     .from("jobs")
@@ -37,22 +39,9 @@ export async function GET(request: Request) {
     .order("created_at", { ascending: true });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  let steps = 0;
-  for (const { id } of jobs) {
-    let nextId: string | null = id;
-    // Follow a finished job into its successor while time remains.
-    while (nextId && timeLeft()) {
-      const { snapshot, ran } = await runJobStepDetailed(store, JOB_HANDLERS, nextId, deps);
-      if (!ran) break; // locked by a browser tab, or finished elsewhere
-      steps += 1;
-      if (snapshot.status === "done") {
-        nextId = snapshot.nextJobId;
-      } else if (snapshot.status === "failed" || snapshot.error) {
-        break; // leave a flaky job for the next sweep rather than hammering it
-      }
-    }
-    if (!timeLeft()) break;
-  }
-
+  const steps = await sweepJobs(
+    jobs.map((j) => j.id),
+    (id) => runJobStepDetailed(store, JOB_HANDLERS, id, deps),
+  );
   return NextResponse.json({ steps, elapsedMs: Date.now() - startedAt });
 }
