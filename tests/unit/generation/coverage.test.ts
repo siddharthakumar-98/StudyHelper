@@ -114,6 +114,18 @@ describe("buildCoverageReport", () => {
     );
   });
 
+  it("adds how many more questions wait for review to the shortfall note (item 10)", () => {
+    const questions = [
+      ...Array.from({ length: 7 }, (_, i) => q({ id: `a${i}` })),
+      q({ id: "r1", status: "needs_review" }),
+      q({ id: "r2", status: "needs_review" }),
+      q({ id: "x", status: "retired" }),
+    ];
+    expect(buildCoverageReport({ ...base, questions }).shortfallNote).toBe(
+      "Only 7 questions could be written from this material without repeating or going beyond the slides (target 100). Adding more handouts will increase coverage. 2 more are waiting for review.",
+    );
+  });
+
   it("has no shortfall note once the target is met", () => {
     const questions = Array.from({ length: 5 }, (_, i) => q({ id: `a${i}` }));
     const report = buildCoverageReport({ ...base, target: 5, questions });

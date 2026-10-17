@@ -112,6 +112,7 @@ export function buildCoverageReport(input: CoverageInput): CoverageReport {
     targetMet,
     shortfallNote: targetMet
       ? null
-      : `Only ${active} questions could be written from this material without repeating or going beyond the slides (target ${target}). Adding more handouts will increase coverage.`,
+      : `Only ${active} questions could be written from this material without repeating or going beyond the slides (target ${target}). Adding more handouts will increase coverage.` +
+        (totals.needsReview > 0 ? ` ${totals.needsReview} more are waiting for review.` : ""),
   };
 }
