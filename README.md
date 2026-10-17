@@ -95,7 +95,7 @@ Uploading a second handout that overlaps the first reuses existing topics, and q
 
 The e2e suite starts its own dev server with `AI_FAKE=1`: the fake client returns deterministic extraction and questions, so e2e spends nothing. But Playwright reuses any server already listening on port 3000, and that server may be using your real API key. Stop any other dev server before running `npm run test:e2e`, or start the server yourself with `AI_FAKE=1 npm run dev` and leave it running. The same command is the way to click through the app without spending anything.
 
-The e2e specs share one local database and reset it, so run them on a throwaway local stack, not one holding a handout you care about.
+The e2e specs share one local database and reset it, so run them on a throwaway local stack, not one holding a handout you care about. The integration and e2e helpers refuse to start unless `NEXT_PUBLIC_SUPABASE_URL` is a `localhost` or `127.0.0.1` URL, and `test_reset_app_tables()` refuses to run on any database where `supabase/seed.sql` (applied only by `npx supabase db reset`) has not switched it on.
 
 ## Evals
 
@@ -166,7 +166,7 @@ You do the account steps; nothing here is automatic.
 6. **Set the environment variables** in the Vercel project (Production and Preview): every variable in `.env.example` except `AI_FAKE`. Use the cloud project's URL, anon key and service-role key, a real `ANTHROPIC_API_KEY`, and your chosen student and admin credentials. Leave `AI_FAKE` unset: the app throws on startup if it is `1` on a production deployment.
 7. **Set `CRON_SECRET`** to a long random string. Vercel sends it as a bearer token to `/api/cron/jobs`; requests without it get a 401.
 8. **Deploy** (push the branch, or run `npx vercel --prod`).
-9. **Create the accounts** in the cloud project by running the seed script with the cloud values, either by temporarily pointing `.env.local` at the cloud project or by passing them inline:
+9. **Create the accounts** in the cloud project by running the seed script with the cloud values passed inline. Never point `.env.local` at the cloud project, not even for a moment: the test suites reset whatever database it names. (They refuse any URL that is not `localhost` or `127.0.0.1`, and the reset function only runs where `supabase/seed.sql` enabled it, but do not rely on that.)
 
    ```bash
    NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co \

@@ -67,12 +67,37 @@ $$;
 revoke execute on function public.claim_job(uuid, int) from public, anon, authenticated;
 grant execute on function public.claim_job(uuid, int) to service_role;
 
--- Extend the test reset helper to cover jobs.
+-- Local-only opt-in for test_reset_app_tables (R39). The schema is not exposed
+-- through the Data API, and only the service role may read it; nobody but the
+-- database owner can write it. supabase/seed.sql, which `npx supabase db reset`
+-- runs on the local stack and `supabase db push` never runs, adds the one row.
+-- (A database-level `app.allow_test_reset` setting would read more naturally, but
+-- the local `postgres` role is not a superuser and may not persist a custom
+-- parameter with ALTER DATABASE / ROLE / FUNCTION ... SET.)
+create schema if not exists test_support;
+revoke all on schema test_support from public, anon, authenticated;
+grant usage on schema test_support to service_role;
+create table test_support.settings (
+  name text primary key,
+  value text not null
+);
+revoke all on test_support.settings from public, anon, authenticated, service_role;
+grant select on test_support.settings to service_role;
+
+-- Extend the test reset helper to cover jobs. It wipes every handout and
+-- question, so it refuses to run unless this database opted in (the
+-- allow_test_reset row above, local stack only): a test pointed at the cloud
+-- project by mistake cannot destroy the real bank (R39).
 create or replace function public.test_reset_app_tables() returns void
 language plpgsql
 set search_path = public
 as $$
 begin
+  if not exists (
+    select 1 from test_support.settings where name = 'allow_test_reset' and value = 'on'
+  ) then
+    raise exception 'test_reset_app_tables is disabled on this database (allow_test_reset is not on)';
+  end if;
   truncate table
     public.jobs,
     public.ai_calls,

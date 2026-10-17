@@ -1,5 +1,11 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { expect, type Page } from "@playwright/test";
+import { assertLocalSupabaseUrl } from "../localOnly";
+
+// Every spec imports this file. The specs reset and seed the database (and the dev
+// server they drive uses the same .env.local), so refuse to start against anything
+// but the local stack, before any spec touches it.
+assertLocalSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
 
 /** Waits until the login form is hydrated, so fill/click are never lost to a cold compile. */
 export async function openLogin(page: Page) {
@@ -20,6 +26,7 @@ export async function loginAs(page: Page, who: "student" | "admin" = "student") 
 // ---------------------------------------------------------------- question bank seeding
 
 function serviceDb(): SupabaseClient {
+  assertLocalSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,

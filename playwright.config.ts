@@ -1,7 +1,10 @@
 import { config } from "dotenv";
 import { defineConfig, devices } from "@playwright/test";
+import { assertLocalSupabaseUrl } from "./tests/localOnly";
 
 config({ path: ".env.local", quiet: true });
+// The specs reset the database, and the dev server below uses the same .env.local (R39).
+assertLocalSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
 
 export default defineConfig({
   testDir: "tests/e2e",

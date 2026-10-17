@@ -165,7 +165,8 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
--- Test support: wipes app data (not profiles/auth). Service role only.
+-- Test support: wipes app data (not profiles/auth). Service role only. The final
+-- definition, with its local-only guard, is in 20261015000300_jobs.sql.
 create function public.test_reset_app_tables() returns void
 language plpgsql
 set search_path = public

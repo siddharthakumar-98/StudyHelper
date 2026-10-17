@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { assertLocalSupabaseUrl } from "../localOnly";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -7,11 +8,20 @@ function env(name: string): string {
   return value;
 }
 
+// Integration tests reset and seed the database: never against anything but the local stack.
+assertLocalSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
+
+function supabaseUrl(): string {
+  const url = env("NEXT_PUBLIC_SUPABASE_URL");
+  assertLocalSupabaseUrl(url);
+  return url;
+}
+
 const clientOptions = { auth: { persistSession: false, autoRefreshToken: false } };
 
 export function serviceClient(): SupabaseClient {
   return createClient(
-    env("NEXT_PUBLIC_SUPABASE_URL"),
+    supabaseUrl(),
     env("SUPABASE_SERVICE_ROLE_KEY"),
     clientOptions,
   );
@@ -19,7 +29,7 @@ export function serviceClient(): SupabaseClient {
 
 export function anonClient(): SupabaseClient {
   return createClient(
-    env("NEXT_PUBLIC_SUPABASE_URL"),
+    supabaseUrl(),
     env("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
     clientOptions,
   );
