@@ -126,3 +126,22 @@ export async function latestJobOf(
   if (error) throw new Error(`Could not look up the job: ${error.message}`);
   return data[0] ?? null;
 }
+
+/** The newest job of each of these handouts (handouts without a job are left out). */
+export async function latestJobsOf(
+  db: SupabaseClient<Database>,
+  documentIds: string[],
+): Promise<Map<string, LatestJob>> {
+  const latest = new Map<string, LatestJob>();
+  if (documentIds.length === 0) return latest;
+  const { data, error } = await db
+    .from("jobs")
+    .select("id, kind, status, document_id")
+    .in("document_id", documentIds)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`Could not look up the jobs: ${error.message}`);
+  for (const { document_id, ...job } of data) {
+    if (!latest.has(document_id)) latest.set(document_id, job);
+  }
+  return latest;
+}

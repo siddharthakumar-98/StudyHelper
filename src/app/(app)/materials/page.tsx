@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { formatClassDate, pagesLabel, statusLabel } from "@/components/materials/status";
+import { documentStatusView, formatClassDate, pagesLabel } from "@/components/materials/status";
 import { UploadForm } from "@/components/materials/UploadForm";
 import { requireUser } from "@/lib/auth";
 import { createServerSupabase } from "@/lib/supabase/server";
+import { getLatestJobs } from "@/modules/ingestion/upload";
 
 export default async function MaterialsPage() {
   const user = await requireUser();
@@ -12,6 +13,14 @@ export default async function MaterialsPage() {
     .select("id, title, class_date, page_count, status, created_at")
     .order("created_at", { ascending: false });
   if (error) throw new Error(`Could not load materials: ${error.message}`);
+  // Read after the documents: a label can run a step ahead of its document, never behind.
+  const latestJobs = await getLatestJobs(documents.filter((d) => d.status !== "ready").map((d) => d.id));
+  const label = (doc: { id: string; status: string }) =>
+    documentStatusView({
+      docStatus: doc.status,
+      latestJob: latestJobs.get(doc.id) ?? null,
+      isAdmin: user.role === "admin",
+    }).label;
 
   return (
     <>
@@ -29,7 +38,7 @@ export default async function MaterialsPage() {
                 <span className="text-xl font-bold text-blue-900">{doc.title}</span>
                 <span className="text-zinc-800">
                   {formatClassDate(doc.class_date)} · {pagesLabel(doc.page_count)} ·{" "}
-                  {statusLabel(doc.status)}
+                  {label(doc)}
                 </span>
               </Link>
             </li>

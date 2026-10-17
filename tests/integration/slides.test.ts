@@ -5,6 +5,7 @@ import { SupabaseJobStore } from "@/modules/jobs/store";
 import {
   MAX_SLIDE_TEXT_LENGTH,
   latestJobOf,
+  latestJobsOf,
   pageViewUrlFor,
   updateSlideTextRecord,
 } from "@/modules/ingestion/slideService";
@@ -108,5 +109,21 @@ describe("slide review services", () => {
       kind: "topic_map",
       status: "failed",
     });
+  });
+});
+
+describe("latestJobsOf", () => {
+  beforeAll(resetDb);
+
+  it("returns each handout's newest job, whatever its status, and leaves out handouts without one", async () => {
+    const a = await documentWithOneSlide();
+    const b = await documentWithOneSlide();
+    const store = new SupabaseJobStore(db);
+    const old = await createJob(store, "extract", a.documentId, {});
+    await db.from("jobs").update({ status: "done" }).eq("id", old);
+    const newest = await createJob(store, "topic_map", a.documentId, {});
+    const latest = await latestJobsOf(db, [a.documentId, b.documentId]);
+    expect([...latest.entries()]).toEqual([[a.documentId, { id: newest, kind: "topic_map", status: "pending" }]]);
+    expect((await latestJobsOf(db, [])).size).toBe(0);
   });
 });

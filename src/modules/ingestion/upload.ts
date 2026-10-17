@@ -11,6 +11,7 @@ import {
 } from "./uploadService";
 import {
   latestJobOf,
+  latestJobsOf,
   pageViewUrlFor,
   startQuestionWritingRecord,
   updateSlideTextRecord,
@@ -59,4 +60,10 @@ export async function getPageViewUrl(pageId: string): Promise<string> {
 export async function getLatestJob(documentId: string): Promise<LatestJob | null> {
   await requireUser();
   return latestJobOf(createServiceSupabase(), documentId);
+}
+
+/** The newest job of each handout, for the stage labels of the Materials list. */
+export async function getLatestJobs(documentIds: string[]): Promise<Map<string, LatestJob>> {
+  await requireUser();
+  return latestJobsOf(createServiceSupabase(), documentIds);
 }
