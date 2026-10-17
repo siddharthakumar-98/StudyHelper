@@ -6,6 +6,7 @@ import { JOB_HANDLERS } from "@/modules/jobs/registry";
 import { VERIFY_START_WINDOW_MS } from "@/modules/generation/handlers";
 import { MemoryJobStore } from "@/modules/jobs/store";
 import type { AiCallInput } from "@/modules/ai/client";
+import { APIConnectionTimeoutError } from "@anthropic-ai/sdk";
 import { AiTruncatedError } from "@/modules/ai/errors";
 import { createFakeAiClient, DEFAULT_FAKE_RESPONDERS, type FakeResponders } from "@/modules/ai/fake";
 import { processDraftQuestion, SIMILAR_STEM_THRESHOLD } from "@/modules/generation/verify";
@@ -485,5 +486,67 @@ describe("verify stage", () => {
     expect(snapshots.at(-1)).toMatchObject({ status: "done", error: null });
     expect(await outcome(await questionsOfRun(flaky.runId))).toEqual(expected);
     expect(verifyCalls).toBe(5);
+  });
+  it("(R37) a draft whose check keeps failing goes to review on the job's last attempt; the rest finish", async () => {
+    const f = await fixtureRun();
+    await saveDrafts(f, [{ stem: STEMS[0] }, { stem: `${STEMS[1]} STUCK` }, { stem: STEMS[2] }]);
+    const ai = createFakeAiClient({
+      ...DEFAULT_FAKE_RESPONDERS,
+      verify: (input) => {
+        if (String(input.meta?.stem).includes("STUCK")) throw new AiTruncatedError();
+        return DEFAULT_FAKE_RESPONDERS.verify!(input);
+      },
+    });
+
+    const snapshots = await verify(f, { ai, db });
+    // Attempts 1 and 2 retry as usual; attempt 3 sets the stuck draft aside and carries on.
+    expect(snapshots.map((s) => [s.status, s.attempts])).toEqual([
+      ["pending", 1],
+      ["pending", 2],
+      ["done", 0],
+    ]);
+    expect(snapshots[0].error).toMatch(/truncated/);
+    expect(snapshots.at(-1)!.error).toBeNull();
+
+    const questions = await questionsOfRun(f.runId);
+    expect(questions.map((q) => q.status)).toEqual(["active", "needs_review", "active"]);
+    expect(questions[1].version.review_notes).toEqual([
+      "Automatic check could not finish: the AI's answer was cut off",
+    ]);
+    const { data: doc } = await db.from("documents").select("status").eq("id", f.documentId).single();
+    expect(doc!.status).toBe("ready");
+  });
+
+  it("(R37) a check that times out on the last attempt is set aside the same way", async () => {
+    const f = await fixtureRun();
+    await saveDrafts(f, [{ stem: `${STEMS[0]} SLOW` }, { stem: STEMS[1] }]);
+    const ai = createFakeAiClient({
+      ...DEFAULT_FAKE_RESPONDERS,
+      verify: (input) => {
+        if (String(input.meta?.stem).includes("SLOW")) throw new APIConnectionTimeoutError();
+        return DEFAULT_FAKE_RESPONDERS.verify!(input);
+      },
+    });
+    const snapshots = await verify(f, { ai, db });
+    expect(snapshots.at(-1)).toMatchObject({ status: "done", error: null });
+    const questions = await questionsOfRun(f.runId);
+    expect(questions.map((q) => q.status)).toEqual(["needs_review", "active"]);
+    expect(questions[0].version.review_notes).toEqual([
+      "Automatic check could not finish: the AI took too long to answer",
+    ]);
+  });
+
+  it("(R37) an error that is not the AI's still fails the job after three attempts", async () => {
+    const f = await fixtureRun();
+    await saveDrafts(f, [{ stem: STEMS[0] }]);
+    const ai = createFakeAiClient({
+      ...DEFAULT_FAKE_RESPONDERS,
+      verify: () => {
+        throw new Error("database went away");
+      },
+    });
+    const snapshots = await verify(f, { ai, db });
+    expect(snapshots.at(-1)).toMatchObject({ status: "failed", attempts: 3 });
+    expect((await questionsOfRun(f.runId)).map((q) => q.status)).toEqual(["draft"]);
   });
 });

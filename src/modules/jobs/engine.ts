@@ -67,13 +67,14 @@ export async function runJobStepDetailed(
         jobId: claimed.id,
         documentId: claimed.document_id,
         step: claimed.step,
+        attempt: claimed.attempts,
         payload: (claimed.payload as Record<string, unknown>) ?? {},
         ai: deps.ai,
         db: deps.db,
       });
       outcome = {
         ...claimed,
-        step: claimed.step + 1,
+        step: !result.done && result.repeatStep ? claimed.step : claimed.step + 1,
         progress: result.progress,
         attempts: 0,
         error: null,

@@ -7,7 +7,15 @@ export type JobKind = "split" | "extract" | "topic_map" | "generate" | "verify";
 export type Progress = { current: number; total: number; label: string };
 
 export type StepResult =
-  | { done: false; progress: Progress }
+  | {
+      done: false;
+      progress: Progress;
+      /**
+       * Run the same step number again (the handler changed its plan, e.g. split a
+       * batch, so this position now holds new work). Counts as a success.
+       */
+      repeatStep?: boolean;
+    }
   | {
       done: true;
       progress: Progress;
@@ -18,6 +26,12 @@ export interface JobContext {
   jobId: string;
   documentId: string;
   step: number;
+  /**
+   * Which attempt at this step this is, 1-based, as counted by the claim. A step
+   * that throws on attempt MAX_ATTEMPTS fails the job, so handlers can set one bad
+   * item aside on the last attempt instead of blocking the whole handout (R37).
+   */
+  attempt: number;
   payload: Record<string, unknown>;
   ai: AiClient;
   db: SupabaseClient<Database>;

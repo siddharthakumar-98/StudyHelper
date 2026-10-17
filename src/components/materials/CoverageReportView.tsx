@@ -3,6 +3,7 @@ import type { CoverageReport } from "@/modules/generation/coverage";
 const REASON_COPY: Record<CoverageReport["slidesWithoutQuestions"][number]["reason"], string> = {
   unreadable: "The text could not be read",
   "not in any topic": "Not in any topic",
+  "could not be processed automatically": "Could not be processed automatically",
   "no question generated": "No question could be written from it",
 };
 

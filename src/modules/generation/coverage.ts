@@ -22,6 +22,8 @@ export type CoverageInput = {
     topicId: string;
     sourceSlideIds: string[];
   }[];
+  /** Slides of batches the generator had to skip (generation_runs.report.skippedBatches, R37). */
+  skippedSlideIds?: string[];
 };
 
 export type CoverageReport = {
@@ -36,7 +38,11 @@ export type CoverageReport = {
   slidesWithoutQuestions: {
     slideId: string;
     label: string;
-    reason: "unreadable" | "not in any topic" | "no question generated";
+    reason:
+      | "unreadable"
+      | "not in any topic"
+      | "could not be processed automatically"
+      | "no question generated";
   }[];
   targetMet: boolean;
   shortfallNote: string | null;
@@ -82,6 +88,7 @@ export function buildCoverageReport(input: CoverageInput): CoverageReport {
     if (q.status === "retired") continue;
     for (const id of q.sourceSlideIds) covered.add(id);
   }
+  const skipped = new Set(input.skippedSlideIds ?? []);
   const slidesWithoutQuestions: CoverageReport["slidesWithoutQuestions"] = [];
   for (const slide of slides) {
     if (covered.has(slide.id)) continue;
@@ -90,7 +97,9 @@ export function buildCoverageReport(input: CoverageInput): CoverageReport {
         ? "unreadable"
         : slide.topicIds.length === 0
           ? "not in any topic"
-          : "no question generated";
+          : skipped.has(slide.id)
+            ? "could not be processed automatically"
+            : "no question generated";
     slidesWithoutQuestions.push({ slideId: slide.id, label: slide.label, reason });
   }
 

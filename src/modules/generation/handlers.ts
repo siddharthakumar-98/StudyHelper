@@ -1,7 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Json } from "@/lib/supabase/database.types";
-import type { JobHandler } from "@/modules/jobs/types";
+import { AiTruncatedError, aiItemFailureReason, isAiTimeout } from "@/modules/ai/errors";
 import type { GeneratedMcq, GeneratedSaq } from "@/modules/ai/schemas/generation";
+import { MAX_ATTEMPTS } from "@/modules/jobs/engine";
+import type { JobHandler } from "@/modules/jobs/types";
 import { slideLabel } from "@/modules/ingestion/slideLabel";
 import {
   generateForTopic,
@@ -11,8 +13,15 @@ import {
   type SlideWithPage,
 } from "./generate";
 import { buildTopicMap, reconcileTopicMap, slideExcerpt, type TopicMapSlide } from "./topicMap";
+import {
+  expandSplitBatches,
+  isSkippedBatch,
+  readRunReport,
+  type RunReport,
+  type SkippedBatch,
+} from "./batchPlan";
 import { AUTO_CHECK_PREFIX, isMcq, validateGenerated } from "./validate";
-import { processDraftQuestion } from "./verify";
+import { markCheckUnfinished, processDraftQuestion } from "./verify";
 
 /**
  * One step groups the handout's readable slides into topics (reusing topic names
@@ -101,10 +110,11 @@ type PlanBatch = {
 
 /**
  * The generate stage's units of work: one batch of at most 6 readable slides per
- * (topic, batch index), topics ordered by name and slides by page and position.
+ * (topic, batch index), topics ordered by name and slides by page and position,
+ * with every batch the run split (report.splitBatches) replaced by its halves.
  * Recomputed from the database on every step, so each step sees the same plan.
  */
-async function loadGenerationPlan(db: Db, documentId: string): Promise<PlanBatch[]> {
+async function loadGenerationPlan(db: Db, documentId: string, report: RunReport): Promise<PlanBatch[]> {
   const { data, error } = await db
     .from("slide_topics")
     .select(
@@ -145,7 +155,7 @@ async function loadGenerationPlan(db: Db, documentId: string): Promise<PlanBatch
       const ordered = [...topic.slides].sort(
         (a, b) => a.pageNo - b.pageNo || a.positionOnPage - b.positionOnPage,
       );
-      return planTopicBatches(ordered).map((slides, batchIndex) => ({
+      const batches = planTopicBatches(ordered).map((slides, batchIndex) => ({
         topicId,
         topicName: topic.name,
         batchIndex,
@@ -153,7 +163,40 @@ async function loadGenerationPlan(db: Db, documentId: string): Promise<PlanBatch
         slides,
         otherSlides: ordered.filter((s) => !slides.includes(s)),
       }));
+      return expandSplitBatches(batches, new Set(report.splitBatches), (parent, slides, batchKey) => ({
+        ...parent,
+        batchKey,
+        slides,
+        otherSlides: ordered.filter((s) => !slides.includes(s)),
+      }));
     });
+}
+
+/** The run's report (split keys and skipped batches) with whatever else it holds. */
+async function loadRunReport(db: Db, runId: string): Promise<{ raw: Record<string, Json>; report: RunReport }> {
+  const { data, error } = await db.from("generation_runs").select("report").eq("id", runId).maybeSingle();
+  if (error) throw new Error(`Could not read the generation run: ${error.message}`);
+  if (!data) throw new Error("The generation run was not found");
+  const raw =
+    data.report && typeof data.report === "object" && !Array.isArray(data.report)
+      ? (data.report as Record<string, Json>)
+      : {};
+  return { raw, report: readRunReport(data.report) };
+}
+
+/** Rewrites the run's split keys and skipped batches, keeping the rest of the report. */
+async function saveRunReport(
+  db: Db,
+  runId: string,
+  change: (report: RunReport) => RunReport,
+): Promise<void> {
+  const { raw, report } = await loadRunReport(db, runId);
+  const next = change(report);
+  const { error } = await db
+    .from("generation_runs")
+    .update({ report: { ...raw, ...next } as unknown as Json })
+    .eq("id", runId);
+  if (error) throw new Error(`Could not update the generation run: ${error.message}`);
 }
 
 /**
@@ -235,12 +278,19 @@ async function deleteStaleDrafts(db: Db, runId: string, plan: PlanBatch[]): Prom
  * and the finishing step again, delete the run's drafts from batches no longer
  * in the plan: a later topic-map pass can reuse the run, and the plan can
  * shrink mid-run. The last step hands the run to verify.
+ *
+ * One bad batch never blocks the handout (R37): a batch of several slides whose
+ * answer is cut off or times out (or that keeps failing until the job's last
+ * attempt) is split in half and the same step runs again on the first half; a
+ * single slide that still fails on the last attempt is skipped and recorded in
+ * the run's report, which the coverage report shows.
  */
-export const generateHandler: JobHandler = async ({ db, ai, documentId, step, payload }) => {
+export const generateHandler: JobHandler = async ({ db, ai, documentId, step, attempt, payload }) => {
   const runId = payload.runId;
   if (typeof runId !== "string" || !runId) throw new Error("The generate job has no generation run");
 
-  const plan = await loadGenerationPlan(db, documentId);
+  const { report } = await loadRunReport(db, runId);
+  const plan = await loadGenerationPlan(db, documentId, report);
   if (step === 0) await deleteStaleDrafts(db, runId, plan);
 
   const next = { kind: "verify" as const, payload: { runId } };
@@ -258,44 +308,95 @@ export const generateHandler: JobHandler = async ({ db, ai, documentId, step, pa
     };
   }
 
-  const [avoidStems, pageDocs] = await Promise.all([
-    loadAvoidStems(db, batch, runId),
-    loadPagePhotos(db, batch.slides),
-  ]);
-  const result = await generateForTopic(
-    {
-      topicName: batch.topicName,
-      slides: batch.slides,
-      pageDocs,
-      avoidStems,
-      contextSlides: batch.otherSlides,
-      ...targetsFor(batch.slides.length),
-      batchIndex: batch.batchIndex,
-    },
-    ai,
-    documentId,
-  );
-
-  const items = [...result.mcqs, ...result.saqs].map((q) => toSaveItem(q, batch, documentId));
-  const { error: saveError } = await db.rpc("save_generated_questions", {
-    p_run_id: runId,
-    p_topic_id: batch.topicId,
-    p_batch_key: batch.batchKey,
-    p_items: items,
-  });
-  if (saveError) {
-    throw new Error(`Could not save the questions for ${batch.topicName}: ${saveError.message}`);
-  }
-
   const progress = {
     current: step + 1,
     total: plan.length,
     label: `Writing questions: ${batch.topicName} (${step + 1} of ${plan.length})`,
   };
-  if (step < plan.length - 1) return { done: false, progress };
-  await deleteStaleDrafts(db, runId, plan);
-  return { done: true, progress, next };
+  const finish = async () => {
+    if (step < plan.length - 1) return { done: false as const, progress };
+    await deleteStaleDrafts(db, runId, plan);
+    return { done: true as const, progress, next };
+  };
+  const slideIds = batch.slides.map((s) => s.id);
+  if (isSkippedBatch(report.skippedBatches, batch.batchKey, slideIds)) return finish();
+
+  const [avoidStems, pageDocs] = await Promise.all([
+    loadAvoidStems(db, batch, runId),
+    loadPagePhotos(db, batch.slides),
+  ]);
+  let result: Awaited<ReturnType<typeof generateForTopic>>;
+  try {
+    result = await generateForTopic(
+      {
+        topicName: batch.topicName,
+        slides: batch.slides,
+        pageDocs,
+        avoidStems,
+        contextSlides: batch.otherSlides,
+        ...targetsFor(batch.slides.length),
+        batchIndex: batch.batchIndex,
+      },
+      ai,
+      documentId,
+    );
+  } catch (err) {
+    const reason = aiItemFailureReason(err);
+    const lastAttempt = attempt >= MAX_ATTEMPTS;
+    if (reason === null) throw err;
+    if (batch.slides.length > 1 && (err instanceof AiTruncatedError || isAiTimeout(err) || lastAttempt)) {
+      await saveRunReport(db, runId, (r) => ({
+        ...r,
+        splitBatches: r.splitBatches.includes(batch.batchKey)
+          ? r.splitBatches
+          : [...r.splitBatches, batch.batchKey],
+      }));
+      return {
+        done: false,
+        repeatStep: true,
+        progress: {
+          current: step,
+          total: plan.length + 1,
+          label: `Writing questions: ${batch.topicName} (trying fewer slides at a time)`,
+        },
+      };
+    }
+    if (!lastAttempt) throw err;
+    const skipped: SkippedBatch = {
+      batchKey: batch.batchKey,
+      slideIds,
+      slideLabels: batch.slides.map((s) => s.label),
+      reason,
+    };
+    await saveRunReport(db, runId, (r) => ({
+      ...r,
+      skippedBatches: [
+        ...r.skippedBatches.filter((s) => s.batchKey !== batch.batchKey),
+        skipped,
+      ],
+    }));
+    // Clear any drafts an earlier pass wrote for this batch (replace, not append).
+    await saveBatch(db, runId, batch, []);
+    console.warn(`generate: skipped ${batch.batchKey} of run ${runId}: ${reason}`);
+    return finish();
+  }
+
+  const items = [...result.mcqs, ...result.saqs].map((q) => toSaveItem(q, batch, documentId));
+  await saveBatch(db, runId, batch, items);
+  return finish();
 };
+
+async function saveBatch(db: Db, runId: string, batch: PlanBatch, items: Record<string, Json>[]): Promise<void> {
+  const { error } = await db.rpc("save_generated_questions", {
+    p_run_id: runId,
+    p_topic_id: batch.topicId,
+    p_batch_key: batch.batchKey,
+    p_items: items,
+  });
+  if (error) {
+    throw new Error(`Could not save the questions for ${batch.topicName}: ${error.message}`);
+  }
+}
 
 /** Most draft questions one verify step checks. */
 export const VERIFY_BATCH_SIZE = 5;
@@ -324,9 +425,10 @@ async function countRunQuestions(db: Db, runId: string, draftsOnly: boolean): Pr
  * a new one only within VERIFY_START_WINDOW_MS of the step's start
  * (processDraftQuestion: pre-check notes, duplicates, then the independent
  * verifier). When no drafts remain, the run is completed and the handout is
- * ready. Safe to re-run: only drafts are processed.
+ * ready. Safe to re-run: only drafts are processed. On the job's last attempt a
+ * draft whose check the AI cannot finish goes to review instead (R37).
  */
-export const verifyHandler: JobHandler = async ({ db, ai, documentId, payload }) => {
+export const verifyHandler: JobHandler = async ({ db, ai, documentId, attempt, payload }) => {
   const runId = payload.runId;
   if (typeof runId !== "string" || !runId) throw new Error("The verify job has no generation run");
 
@@ -343,7 +445,16 @@ export const verifyHandler: JobHandler = async ({ db, ai, documentId, payload })
   const started = Date.now();
   for (const draft of drafts) {
     if (Date.now() - started >= VERIFY_START_WINDOW_MS) break;
-    await processDraftQuestion(draft.id, { db, ai, documentId });
+    try {
+      await processDraftQuestion(draft.id, { db, ai, documentId });
+    } catch (err) {
+      // R37: earlier attempts retry the step as usual. On the last one, a draft the
+      // AI keeps failing on goes to the review queue and the others carry on.
+      const reason = aiItemFailureReason(err);
+      if (reason === null || attempt < MAX_ATTEMPTS) throw err;
+      console.warn(`verify: question ${draft.id} set aside for review: ${reason}`);
+      await markCheckUnfinished(db, draft.id, reason);
+    }
   }
 
   const [total, remaining] = await Promise.all([

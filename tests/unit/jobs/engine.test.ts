@@ -181,6 +181,46 @@ describe("runJobStep", () => {
   });
 });
 
+describe("attempt and repeatStep (R37)", () => {
+  it("passes the claimed attempt (1-based) to the handler, and starts again at 1 after a success", async () => {
+    const seen: number[] = [];
+    let calls = 0;
+    const { store, id, handlers } = await setup({
+      split: async (ctx) => {
+        seen.push(ctx.attempt);
+        calls += 1;
+        if (calls <= 2) throw new Error("flaky");
+        return { done: false, progress: { current: 1, total: 9, label: "x" } };
+      },
+    });
+    for (let i = 0; i < 4; i++) await runJobStep(store, handlers, id, deps);
+    expect(seen).toEqual([1, 2, 3, 1]);
+  });
+
+  it("repeatStep keeps the step number but counts as a success", async () => {
+    const steps: number[] = [];
+    let calls = 0;
+    const { store, id, handlers } = await setup({
+      split: async (ctx) => {
+        steps.push(ctx.step);
+        calls += 1;
+        if (calls === 1) throw new Error("flaky");
+        if (calls === 2) {
+          return { done: false, repeatStep: true, progress: { current: 0, total: 2, label: "split" } };
+        }
+        return { done: false, progress: { current: 1, total: 2, label: "x" } };
+      },
+    });
+    await runJobStep(store, handlers, id, deps);
+    const repeated = await runJobStep(store, handlers, id, deps);
+    expect(repeated).toMatchObject({ status: "pending", attempts: 0, error: null });
+    expect((await store.get(id)).step).toBe(0);
+    await runJobStep(store, handlers, id, deps);
+    expect(steps).toEqual([0, 0, 0]);
+    expect((await store.get(id)).step).toBe(1);
+  });
+});
+
 describe("resetJob", () => {
   it("retry() on failed job resets attempts to 0 and status pending", async () => {
     const { store, id, handlers } = await setup({

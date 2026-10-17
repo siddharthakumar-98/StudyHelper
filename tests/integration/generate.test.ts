@@ -6,6 +6,7 @@ import { JOB_HANDLERS } from "@/modules/jobs/registry";
 import { MemoryJobStore } from "@/modules/jobs/store";
 import { createFakeAiClient, DEFAULT_FAKE_RESPONDERS, type FakeResponders } from "@/modules/ai/fake";
 import type { AiCallInput } from "@/modules/ai/client";
+import { AiTruncatedError } from "@/modules/ai/errors";
 import { pagePath } from "@/modules/ingestion/paths";
 import type { Database } from "@/lib/supabase/database.types";
 import { createTestUser, resetDb, serviceClient } from "./helpers";
@@ -320,5 +321,133 @@ describe("generate stage", () => {
     expect(snapshot.progress?.label).toBe("No topics to write questions for");
     expect((await store.get(snapshot.nextJobId!)).kind).toBe("verify");
     expect(await questionsOf(runId)).toHaveLength(0);
+  });
+});
+
+describe("generate stage failure isolation (R37)", () => {
+  beforeEach(resetDb);
+
+  /** The batch's own slides as the model sees them (the context section is left out). */
+  const batchText = (input: AiCallInput<unknown>) => textOf(input).split("Other slides in this topic")[0];
+  const batchSize = (input: AiCallInput<unknown>) => (batchText(input).match(/^\[S\d+\]/gm) ?? []).length;
+
+  async function runReport(runId: string) {
+    const { data, error } = await db.from("generation_runs").select("report").eq("id", runId).single();
+    expect(error).toBeNull();
+    return data!.report as { splitBatches?: string[]; skippedBatches?: unknown[] } | null;
+  }
+
+  it("splits a batch whose answer is cut off into halves with stable sub-batch keys", async () => {
+    const { documentId } = await fixtureDocument(["clear", "clear", "clear", "clear"]);
+    const { store, generateJobId, runId } = await topicMap(documentId);
+    const sizes: number[] = [];
+    const ai = createFakeAiClient({
+      ...DEFAULT_FAKE_RESPONDERS,
+      generate: (input) => {
+        sizes.push(batchSize(input));
+        if (batchSize(input) > 1) throw new AiTruncatedError();
+        return DEFAULT_FAKE_RESPONDERS.generate!(input);
+      },
+    });
+
+    const snapshots = await runToEnd(store, generateJobId, { ai, db });
+    expect(snapshots.every((s) => s.error === null)).toBe(true);
+    expect(snapshots.at(-1)).toMatchObject({ status: "done" });
+    expect((await store.get(snapshots.at(-1)!.nextJobId!)).kind).toBe("verify");
+    // 4 -> 2 + 2 -> 1 + 1 + 1 + 1, each split decided on the first cut-off answer.
+    expect(sizes).toEqual([4, 2, 1, 1, 2, 1, 1]);
+
+    const topic = await topicId("Fixture topic");
+    const keys = (await questionsOf(runId)).map((q) => q.batch_key);
+    expect(keys).toEqual(
+      ["0.a.a", "0.a.a", "0.a.b", "0.a.b", "0.b.a", "0.b.a", "0.b.b", "0.b.b"].map((k) => `${topic}:${k}`),
+    );
+    expect((await runReport(runId))?.splitBatches).toEqual([`${topic}:0`, `${topic}:0.a`, `${topic}:0.b`]);
+
+    // Re-running the stage uses the same sub-batches and replaces their drafts.
+    const again = new MemoryJobStore();
+    const rerun = await runToEnd(again, await createJob(again, "generate", documentId, { runId }), { ai, db });
+    expect(rerun.at(-1)).toMatchObject({ status: "done", error: null });
+    expect((await questionsOf(runId)).map((q) => q.batch_key)).toEqual(keys);
+  });
+
+  it("skips a single slide that still fails on the last attempt and records it in the run's report", async () => {
+    const { documentId, slideIds } = await fixtureDocument(["clear", "clear"]);
+    await service.from("source_slides").update({ verbatim_text: "POISON slide text" }).eq("id", slideIds[1]);
+    const { store, generateJobId, runId } = await topicMap(documentId);
+    const ai = createFakeAiClient({
+      ...DEFAULT_FAKE_RESPONDERS,
+      generate: (input) => {
+        if (batchText(input).includes("POISON")) throw new AiTruncatedError();
+        return DEFAULT_FAKE_RESPONDERS.generate!(input);
+      },
+    });
+
+    const snapshots = await runToEnd(store, generateJobId, { ai, db });
+    // Split (2 slides), slide 1 written, slide 2 fails twice and is skipped on attempt 3.
+    expect(snapshots.map((s) => [s.status, s.attempts, s.error === null])).toEqual([
+      ["pending", 0, true],
+      ["pending", 0, true],
+      ["pending", 1, false],
+      ["pending", 2, false],
+      ["done", 0, true],
+    ]);
+    expect((await store.get(snapshots.at(-1)!.nextJobId!)).kind).toBe("verify");
+
+    const topic = await topicId("Fixture topic");
+    expect((await questionsOf(runId)).map((q) => q.batch_key)).toEqual([`${topic}:0.a`, `${topic}:0.a`]);
+    expect((await runReport(runId))?.skippedBatches).toEqual([
+      {
+        batchKey: `${topic}:0.b`,
+        slideIds: [slideIds[1]],
+        slideLabels: ["Slide 2"],
+        reason: "the AI's answer was cut off",
+      },
+    ]);
+
+    // A re-run passes over the skipped slide without calling the model for it again.
+    let calls = 0;
+    const counting = createFakeAiClient({
+      ...DEFAULT_FAKE_RESPONDERS,
+      generate: (input) => {
+        calls += 1;
+        return DEFAULT_FAKE_RESPONDERS.generate!(input);
+      },
+    });
+    const again = new MemoryJobStore();
+    const rerun = await runToEnd(again, await createJob(again, "generate", documentId, { runId }), {
+      ai: counting,
+      db,
+    });
+    expect(rerun.at(-1)).toMatchObject({ status: "done", error: null });
+    expect(calls).toBe(1);
+  });
+
+  it("splits a batch that keeps being refused, once the last attempt is reached", async () => {
+    const { documentId } = await fixtureDocument(["clear", "clear"]);
+    const { store, generateJobId, runId } = await topicMap(documentId);
+    const { AiRefusalError } = await import("@/modules/ai/errors");
+    const ai = createFakeAiClient({
+      ...DEFAULT_FAKE_RESPONDERS,
+      generate: (input) => {
+        if (batchSize(input) > 1) throw new AiRefusalError();
+        return DEFAULT_FAKE_RESPONDERS.generate!(input);
+      },
+    });
+    const snapshots = await runToEnd(store, generateJobId, { ai, db });
+    expect(snapshots.map((s) => [s.status, s.attempts])).toEqual([
+      ["pending", 1],
+      ["pending", 2],
+      ["pending", 0],
+      ["pending", 0],
+      ["done", 0],
+    ]);
+    const topic = await topicId("Fixture topic");
+    expect((await questionsOf(runId)).map((q) => q.batch_key)).toEqual([
+      `${topic}:0.a`,
+      `${topic}:0.a`,
+      `${topic}:0.b`,
+      `${topic}:0.b`,
+    ]);
   });
 });

@@ -38,6 +38,9 @@ export const ANSWER_EXCERPT_CHARS = 200;
 /** Prefix of the review notes the verifier writes. */
 export const VERIFIER_PREFIX = "Verifier: ";
 
+/** Prefix of the note on a draft whose automatic check kept failing (R37). */
+export const UNFINISHED_CHECK_PREFIX = "Automatic check could not finish: ";
+
 export type QuestionWithKey = {
   id: string;
   type: "mcq" | "saq";
@@ -385,4 +388,19 @@ export async function processDraftQuestion(
   const pageDocs = await loadPagePhotos(db, slides);
   const result = await verifyQuestion(question, slides, ai, documentId, pageDocs);
   return record(db, loaded, result.pass ? "verify_pass" : "verify_fail", result.notes, result.conflictNote);
+}
+
+/**
+ * Sends a draft whose automatic check could not finish (the AI kept failing on it)
+ * to the review queue with the note "Automatic check could not finish: <reason>".
+ * A question that is no longer a draft is left alone.
+ */
+export async function markCheckUnfinished(
+  db: Db,
+  questionId: string,
+  reason: string,
+): Promise<QuestionStatus> {
+  const loaded = await loadQuestion(db, questionId);
+  if (loaded.status !== "draft") return loaded.status;
+  return record(db, loaded, "verify_fail", [`${UNFINISHED_CHECK_PREFIX}${reason}`], null);
 }

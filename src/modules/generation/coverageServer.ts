@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { createServiceSupabase } from "@/lib/supabase/service";
 import type { QuestionStatus } from "@/modules/bank/lifecycle";
 import { slideHeading } from "@/modules/ingestion/slideLabel";
+import { readRunReport } from "./batchPlan";
 import {
   DEFAULT_TARGET,
   buildCoverageReport,
@@ -112,8 +113,19 @@ export async function getCoverageReport(documentId: string): Promise<CoverageRep
     }
   }
 
+  // Slides the generator had to skip, from every run of this handout (R37).
+  const { data: runs, error: runsError } = await db
+    .from("generation_runs")
+    .select("report")
+    .eq("document_id", documentId);
+  if (runsError) throw new Error(`Could not load the generation runs: ${runsError.message}`);
+  const skippedSlideIds = runs.flatMap((run) =>
+    readRunReport(run.report).skippedBatches.flatMap((b) => b.slideIds),
+  );
+
   return buildCoverageReport({
     target: DEFAULT_TARGET,
+    skippedSlideIds,
     topics,
     slides: slideRows.map((s) => ({
       id: s.id,

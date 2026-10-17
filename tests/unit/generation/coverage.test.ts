@@ -46,6 +46,23 @@ describe("buildCoverageReport", () => {
     ]);
   });
 
+  it("lists slides of a batch the generator had to skip as could not be processed automatically (R37)", () => {
+    const report = buildCoverageReport({
+      ...base,
+      slides: [
+        { id: "s-skip", label: "Slide 7 · page 4", legibility: "clear", topicIds: ["t1"] },
+        { id: "s-blur", label: "Slide 8 · page 4", legibility: "unreadable", topicIds: [] },
+        { id: "s-ok", label: "Slide 9 · page 4", legibility: "clear", topicIds: ["t1"] },
+      ],
+      questions: [q({ id: "q1", sourceSlideIds: ["s-ok"] })],
+      skippedSlideIds: ["s-skip", "s-blur"],
+    });
+    expect(report.slidesWithoutQuestions).toEqual([
+      { slideId: "s-skip", label: "Slide 7 · page 4", reason: "could not be processed automatically" },
+      { slideId: "s-blur", label: "Slide 8 · page 4", reason: "unreadable" },
+    ]);
+  });
+
   it("does not list a slide that a question needing review cites, but does if only a retired one does", () => {
     const report = buildCoverageReport({
       ...base,
