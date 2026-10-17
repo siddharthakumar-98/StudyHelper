@@ -1,3 +1,4 @@
+import "server-only";
 import { NextResponse } from "next/server";
 import { isRedirectError } from "next/dist/client/components/redirect-error";
 import { ForbiddenError, requireAdmin } from "@/lib/auth";

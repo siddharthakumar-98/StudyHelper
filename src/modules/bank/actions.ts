@@ -1,5 +1,8 @@
 "use server";
 
+// Only the server ever runs this file (the client gets action references), and it
+// uses the service-role client.
+import "server-only";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { createServiceSupabase } from "@/lib/supabase/service";
 import { getAiClient } from "@/modules/ai/usage";
