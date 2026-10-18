@@ -1,0 +1,307 @@
+import type Anthropic from "@anthropic-ai/sdk";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/lib/supabase/database.types";
+import type { AiClient } from "@/modules/ai/client";
+import { GENERATE_QUESTIONS_PROMPT } from "@/modules/ai/prompts/generateQuestions";
+import { GenerationResultSchema, type GenerationResult } from "@/modules/ai/schemas/generation";
+import { MATERIALS_BUCKET } from "@/modules/ingestion/paths";
+
+export type SlideForGeneration = {
+  id: string;
+  label: string;
+  pageId: string;
+  title: string | null;
+  verbatim_text: string;
+  tables: unknown[];
+  diagram_description: string | null;
+};
+
+/** A slide with where its page photo is stored. */
+export type SlideWithPage = SlideForGeneration & { pageNo: number; storagePath: string };
+
+/** A batch's expected output must stay well under the generate task's max_tokens. */
+export const MAX_SLIDES_PER_BATCH = 6;
+
+/** Diagrams described at more length than this are attached as page photos. */
+const LONG_DIAGRAM = 200;
+
+/** The most questions a batch of `slideCount` slides may produce. Fewer is fine. */
+export function targetsFor(slideCount: number): { maxMcq: number; maxSaq: number } {
+  return { maxMcq: Math.ceil(slideCount * 0.9), maxSaq: Math.ceil(slideCount * 0.4) };
+}
+
+/** Chunks a topic's slides into batches of at most 6, keeping their order. */
+export function planTopicBatches<T extends SlideForGeneration>(slides: T[]): T[][] {
+  const batches: T[][] = [];
+  for (let i = 0; i < slides.length; i += MAX_SLIDES_PER_BATCH) {
+    batches.push(slides.slice(i, i + MAX_SLIDES_PER_BATCH));
+  }
+  return batches;
+}
+
+/** Table rows as the model sees them and as basis quotes are matched: cells joined by " | ". */
+function tableLines(tables: unknown[]): string[] {
+  const lines: string[] = [];
+  for (const table of tables as { caption?: unknown; rows?: unknown }[]) {
+    if (typeof table?.caption === "string" && table.caption.trim()) lines.push(table.caption);
+    if (!Array.isArray(table?.rows)) continue;
+    for (const row of table.rows) {
+      if (Array.isArray(row)) lines.push(row.map(String).join(" | "));
+    }
+  }
+  return lines;
+}
+
+/**
+ * Everything a basis quote may be copied from: the slide's text, its tables
+ * flattened row by row, its diagram description and its title (the model sees
+ * all four).
+ */
+export function slideSourceText(slide: SlideForGeneration): string {
+  return [
+    slide.verbatim_text,
+    ...tableLines(slide.tables),
+    slide.diagram_description ?? "",
+    slide.title ?? "",
+  ]
+    .filter((part) => part.trim())
+    .join("\n");
+}
+
+/** Slides whose page photo is sent along: any table, or a long diagram description. */
+export function needsPagePhoto(slide: SlideForGeneration): boolean {
+  return (
+    (Array.isArray(slide.tables) && slide.tables.length > 0) ||
+    (slide.diagram_description?.length ?? 0) > LONG_DIAGRAM
+  );
+}
+
+function startsWith(bytes: Uint8Array, signature: number[]): boolean {
+  return signature.every((byte, i) => bytes[i] === byte);
+}
+
+/** A page's bytes as a content block; the type is read from the file's signature. */
+export function pageBlock(bytes: Uint8Array): Anthropic.Beta.BetaContentBlockParam {
+  const data = Buffer.from(bytes).toString("base64");
+  if (startsWith(bytes, [0x25, 0x50, 0x44, 0x46])) {
+    return { type: "document", source: { type: "base64", media_type: "application/pdf", data } };
+  }
+  if (startsWith(bytes, [0xff, 0xd8, 0xff])) {
+    return { type: "image", source: { type: "base64", media_type: "image/jpeg", data } };
+  }
+  if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47])) {
+    return { type: "image", source: { type: "base64", media_type: "image/png", data } };
+  }
+  throw new Error("A page photo is not a PDF, JPG or PNG");
+}
+
+/** One slide as the model sees it: its short id and label, title, text, tables and diagram. */
+export function slideBlock(slide: SlideForGeneration, alias: string): string {
+  const lines = [`[${alias}] ${slide.label}`, `Title: ${slide.title ?? "(none)"}`];
+  lines.push(`Text:\n${slide.verbatim_text.trim() || "(none)"}`);
+  const rows = tableLines(slide.tables);
+  if (rows.length > 0) lines.push(`Tables:\n${rows.join("\n")}`);
+  if (slide.diagram_description?.trim()) lines.push(`Diagram: ${slide.diagram_description.trim()}`);
+  return lines.join("\n");
+}
+
+/** The page files of the slides that get a photo (needsPagePhoto), one per page. */
+export async function loadPagePhotos(
+  db: SupabaseClient<Database>,
+  slides: SlideWithPage[],
+): Promise<Map<string, Uint8Array>> {
+  const pages = new Map<string, SlideWithPage>();
+  for (const slide of slides) {
+    if (needsPagePhoto(slide) && !pages.has(slide.pageId)) pages.set(slide.pageId, slide);
+  }
+  const photos = new Map<string, Uint8Array>();
+  for (const [pageId, slide] of pages) {
+    const { data, error } = await db.storage.from(MATERIALS_BUCKET).download(slide.storagePath);
+    if (error || !data) {
+      throw new Error(`Could not read page ${slide.pageNo}: ${error?.message ?? "missing"}`);
+    }
+    photos.set(pageId, new Uint8Array(await data.arrayBuffer()));
+  }
+  return photos;
+}
+
+/**
+ * The content blocks for the page photos of `slides` (aliases[i] is slides[i]'s
+ * short id): one photo per page, after a line naming the slides on it, only for
+ * slides that need one and whose page is in pageDocs.
+ */
+export function pagePhotoBlocks(
+  slides: SlideForGeneration[],
+  aliases: string[],
+  pageDocs: Map<string, Uint8Array>,
+): Anthropic.Beta.BetaContentBlockParam[] {
+  const photoAliases = new Map<string, string[]>();
+  slides.forEach((slide, i) => {
+    if (!needsPagePhoto(slide) || !pageDocs.has(slide.pageId)) return;
+    photoAliases.set(slide.pageId, [...(photoAliases.get(slide.pageId) ?? []), aliases[i]]);
+  });
+  const blocks: Anthropic.Beta.BetaContentBlockParam[] = [];
+  for (const [pageId, onPage] of photoAliases) {
+    blocks.push({ type: "text", text: `Page photo for ${onPage.join(", ")}:` });
+    blocks.push(pageBlock(pageDocs.get(pageId)!));
+  }
+  return blocks;
+}
+
+/** Most characters of one context slide's excerpt. */
+export const CONTEXT_EXCERPT_CHARS = 500;
+/** Most characters of the whole "Other slides in this topic" block. */
+export const CONTEXT_BLOCK_CHARS = 12_000;
+
+/** Lines with numbers, formulas or thresholds: where slides contradict each other. */
+const NUMERIC_LINE = /[0-9=<>≤≥/]/;
+
+/**
+ * A context slide's content in at most 500 characters: its text, table rows and
+ * diagram description, with lines that carry numbers or formulas first (so a
+ * "450/TDD" in a table survives a long prose slide), then the rest, each group in
+ * slide order. A line that does not fit is skipped whole (later, shorter lines can
+ * still fit); only a single over-long first line is cut.
+ */
+export function contextExcerpt(slide: SlideForGeneration): string {
+  const lines = [
+    ...slide.verbatim_text.split("\n"),
+    ...tableLines(slide.tables),
+    ...(slide.diagram_description ?? "").split("\n"),
+  ]
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const ordered = [
+    ...lines.filter((line) => NUMERIC_LINE.test(line)),
+    ...lines.filter((line) => !NUMERIC_LINE.test(line)),
+  ];
+  let excerpt = "";
+  for (const line of ordered) {
+    const next = excerpt ? `${excerpt} / ${line}` : line;
+    if (next.length > CONTEXT_EXCERPT_CHARS) {
+      if (!excerpt) excerpt = line.slice(0, CONTEXT_EXCERPT_CHARS);
+      // A later, shorter line (often another number) may still fit.
+      continue;
+    }
+    excerpt = next;
+  }
+  return excerpt;
+}
+
+function contextBlock(slide: SlideForGeneration, ref: string): string {
+  return [
+    `(${ref}) ${slide.label}`,
+    `Title: ${slide.title ?? "(none)"}`,
+    `Excerpt: ${contextExcerpt(slide) || "(none)"}`,
+  ].join("\n");
+}
+
+/**
+ * The read-only "Other slides in this topic" section, at most 12,000 characters:
+ * whole trailing slides past the cap are left out, and the section says so.
+ */
+function contextSection(slides: SlideForGeneration[]): string {
+  const heading = "Other slides in this topic (context only, never cite or quote these):";
+  const blocks: string[] = [];
+  let length = heading.length;
+  for (const [i, slide] of slides.entries()) {
+    const block = contextBlock(slide, `C${i + 1}`);
+    if (length + 2 + block.length > CONTEXT_BLOCK_CHARS) break;
+    blocks.push(block);
+    length += 2 + block.length;
+  }
+  const omitted = slides.length - blocks.length;
+  const note =
+    omitted > 0
+      ? [`(${plural(omitted, "more slide")} of this topic left out to keep this list short.)`]
+      : [];
+  return [heading, ...blocks, ...note].join("\n\n");
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/**
+ * Writes one batch of a topic's questions. The model sees short slide ids (S1,
+ * S2, ...) instead of slide ids; they are mapped back here. An id the model
+ * invents stays as it is, so validateGenerated reports it. The topic's other
+ * slides (contextSlides) are shown as read-only excerpts under refs C1, C2, ...
+ * that are never mapped back, so citing one is reported the same way. Page photos are
+ * attached, one per page, for slides with tables or long diagram descriptions.
+ * Questions beyond the maxima are dropped, never kept.
+ */
+export async function generateForTopic(
+  input: {
+    topicName: string;
+    slides: SlideForGeneration[];
+    /** Page bytes by page id; needed for the pages of slides that get a photo. */
+    pageDocs: Map<string, Uint8Array>;
+    avoidStems: string[];
+    /** The topic's other readable slides (not in this batch): shown for contradictions, never citable. */
+    contextSlides?: SlideForGeneration[];
+    maxMcq: number;
+    maxSaq: number;
+    /** Not sent to the model; lets the fake AI label its questions. */
+    batchIndex?: number;
+  },
+  ai: AiClient,
+  documentId: string,
+): Promise<GenerationResult> {
+  const aliases = input.slides.map((_, i) => `S${i + 1}`);
+  const idOf = new Map(aliases.map((alias, i) => [alias, input.slides[i].id]));
+  const back = (alias: string) => idOf.get(alias.trim().toUpperCase()) ?? alias;
+
+  const avoid = input.avoidStems.length
+    ? input.avoidStems.map((stem) => `- ${stem.replace(/\s+/g, " ").trim()}`).join("\n")
+    : "(none)";
+  const sections = [
+    `Topic: ${input.topicName}`,
+    `Write at most ${plural(input.maxMcq, "MCQ")} and at most ${plural(input.maxSaq, "SAQ")}. Fewer is fine.`,
+    `avoid_stems:\n${avoid}`,
+    `Slides:\n\n${input.slides.map((slide, i) => slideBlock(slide, aliases[i])).join("\n\n")}`,
+  ];
+  const context = input.contextSlides ?? [];
+  if (context.length > 0) {
+    sections.push(contextSection(context));
+  }
+  const text = sections.join("\n\n");
+
+  const content: Anthropic.Beta.BetaContentBlockParam[] = [
+    { type: "text", text },
+    ...pagePhotoBlocks(input.slides, aliases, input.pageDocs),
+  ];
+
+  const firstQuoted = input.slides.findIndex((s) => slideSourceText(s).trim());
+  const { data } = await ai.callStructured({
+    task: "generate",
+    promptVersion: GENERATE_QUESTIONS_PROMPT.version,
+    system: GENERATE_QUESTIONS_PROMPT.system,
+    content,
+    schema: GenerationResultSchema,
+    documentId,
+    // Not sent to the model; lets the fake AI answer with a valid slide id and quote.
+    meta: {
+      topicName: input.topicName,
+      batchIndex: input.batchIndex ?? 0,
+      quoteSlide: firstQuoted >= 0 ? aliases[firstQuoted] : "",
+      quote:
+        firstQuoted >= 0
+          ? slideSourceText(input.slides[firstQuoted]).split("\n").find((l) => l.trim())!.trim().slice(0, 200)
+          : "",
+    },
+  });
+
+  const cite = <Q extends { source_slide_ids: string[] }>(q: Q): Q => ({
+    ...q,
+    source_slide_ids: q.source_slide_ids.map(back),
+  });
+  if (data.mcqs.length > input.maxMcq || data.saqs.length > input.maxSaq) {
+    console.warn(
+      `generate: model wrote ${data.mcqs.length} MCQs / ${data.saqs.length} SAQs for "${input.topicName}" (max ${input.maxMcq} / ${input.maxSaq}); extras dropped`,
+    );
+  }
+  return {
+    mcqs: data.mcqs.slice(0, input.maxMcq).map(cite),
+    saqs: data.saqs.slice(0, input.maxSaq).map(cite),
+    skipped_slides: data.skipped_slides.map((s) => ({ ...s, slide_id: back(s.slide_id) })),
+  };
+}
